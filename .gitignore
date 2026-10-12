@@ -1,0 +1,10 @@
+/out/
+/build/
+/.vs/
+/CMakeUserPresets.json
+/imgui.ini
+*.user
+.env
+.env.*
+*.pem
+*.key
