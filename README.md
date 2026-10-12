@@ -1,6 +1,6 @@
-# CHROMALIS Game — Phase 0A
+# CHROMALIS Game — Phase 0B
 
-Windows x64 / C++20 / DirectX 12 のゲーム本体とRuntimeです。現在は三角形の描画・入力・診断を行う最小hostです。
+Windows x64 / C++20 / DirectX 12 のゲーム本体とRuntimeです。静的glTF/GLBをオフライン変換し、テクスチャ付き3Dモデルを表示できます。0Aの三角形・入力・診断も維持します。
 このリポジトリだけでビルドでき、EditorやDear ImGuiの取得・ビルドは不要です。
 
 ## 必要環境
@@ -29,6 +29,21 @@ WARPの結果はhardware性能の測定ではありません。
 
 ## 操作・診断
 
+リポジトリ直下からモデルを変換・表示:
+
+```powershell
+& .\out\build\vs2026\Debug\ChromalisAssetCooker.exe assets/Cube/Cube.gltf out/cooked/Cube.cmesh --id samples/cube
+& .\out\build\vs2026\Debug\ChromalisGame.exe --asset out/cooked/Cube.cmesh --asset2 out/cooked/Cube.cmesh
+```
+
+初回configureはcgltf v1.15の取得が必要です。オフラインでは `-DCHROMALIS_CGLTF_ARCHIVE=C:/path/to/cgltf-v1.15.tar.gz`。Runtimeだけをビルドするときは `-DCHROMALIS_BUILD_COOKER=OFF` を指定するとcgltfも取得しません。
+
+制作元を変更後、同じID/出力へ再変換します。Gameは起動時に指定ファイルを読み込みます。実行中の手動再生成・再読み込みUIは別ホストのEditorが担当します。`--asset-smoke --asset ...` は連続更新と失敗時の世代保持を自動検証します。
+
+CTestにはCPU変換/不正データ試験、外部CC0 Cube、四色テクスチャによるUV/カリング/深度/カメラ/ワールド変換、変更モデルを再読み込み後に不正データを拒否して画素を保持する試験を含みます。`--asset-check` / `--asset-update` は生成された専用テストモデル用です。
+
+対応形式・保存形式・所有権・制限: [docs/static-assets.md](docs/static-assets.md)。同梱モデルの出典: [assets/Cube/README.md](assets/Cube/README.md)。
+
 - WASD / 矢印: 三角形を移動。Space: 位置をリセット。Esc: 終了。
 - ログは実行ファイルの隣の `logs/` に保存します。`--log file.log` で変更できます。
 - `--warp` はソフトウェア描画を明示選択します。
@@ -39,6 +54,10 @@ WARPの結果はhardware性能の測定ではありません。
 
 - `Main.cpp`: Game host。
 - `src/runtime/`: Win32、DirectX 12、入力、ログ、診断。
+- `src/assets/`: CPU用の版付きcmesh形式、読み込みと検証。
+- `src/cooker/`: cgltf/WICを使うオフライン変換。
+- `src/tests/`: 外部モデルと生成fixtureの検証。
+- `shaders/Mesh.hlsl`: テクスチャ・材質・深度付き静的モデル表示。
 - `shaders/Triangle.hlsl`: DXCでビルド時にコンパイルする診断用シェーダー。
 - `app.manifest`: DPI設定。
 - `CMakeLists.txt`, `CMakePresets.json`: 単独ビルド設定。

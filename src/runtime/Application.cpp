@@ -16,6 +16,10 @@ struct Options {
     UINT64 frameLimit = 0;
     bool smoke = false;
     std::filesystem::path capture, log;
+    std::array<std::filesystem::path,2> assets;
+    bool assetSmoke = false;
+    bool assetCheck = false;
+    std::filesystem::path assetUpdate;
 };
 Options ParseOptions() {
     Options result;
@@ -39,6 +43,11 @@ Options ParseOptions() {
             else if (arg == L"--smoke-test") result.smoke = true;
             else if (arg == L"--capture") result.capture = value();
             else if (arg == L"--log") result.log = value();
+            else if (arg == L"--asset") result.assets[0] = value();
+            else if (arg == L"--asset2") result.assets[1] = value();
+            else if (arg == L"--asset-smoke") result.assetSmoke = true;
+            else if (arg == L"--asset-check") result.assetCheck = true;
+            else if (arg == L"--asset-update") result.assetUpdate = value();
             else if (arg == L"--frames") {
                 const auto text = value();
                 if (text.empty() || text.find_first_not_of(L"0123456789") != std::wstring_view::npos)
@@ -48,6 +57,17 @@ Options ParseOptions() {
             } else throw std::runtime_error("Unknown argument: " + Utf8(arg));
         }
         if (result.smoke) result.frameLimit = 32;
+        if (result.assetCheck) {
+            if (result.assets[0].empty()) throw std::runtime_error("--asset-check requires the corners-depth test asset");
+            result.frameLimit = 4;
+        }
+        if (!result.assetUpdate.empty() && !result.assetCheck) throw std::runtime_error("--asset-update requires --asset-check");
+        if ((result.assetCheck && (result.assetSmoke || result.smoke)) || (result.assetSmoke && result.smoke))
+            throw std::runtime_error("Select only one smoke/pixel test mode");
+        if (result.assetSmoke) {
+            if (result.assets[0].empty()) throw std::runtime_error("--asset-smoke requires --asset");
+            result.frameLimit = 32;
+        }
         if (!result.capture.empty() && !result.frameLimit) throw std::runtime_error("--capture requires --frames or --smoke-test");
         if (result.renderer.gpuValidation && !result.renderer.debug) throw std::runtime_error("GPU validation requires Debug Layer");
     } catch (...) { LocalFree(args); throw; }
@@ -81,6 +101,19 @@ public:
         CheckWin32(GetClientRect(window_, &client), "Get initial client bounds");
         pendingWidth_ = static_cast<UINT>(client.right); pendingHeight_ = static_cast<UINT>(client.bottom);
         renderer_.Initialize(window_, pendingWidth_, pendingHeight_, options_.renderer);
+        for (size_t slot = 0; slot < options_.assets.size(); ++slot)
+            if (!options_.assets[slot].empty() && !renderer_.ReloadModel(slot,options_.assets[slot]))
+                throw std::runtime_error(renderer_.AssetStatus());
+        if (options_.assetSmoke && options_.assets[1].empty()) {
+            options_.assets[1] = options_.assets[0];
+            if (!renderer_.ReloadModel(1,options_.assets[1])) throw std::runtime_error(renderer_.AssetStatus());
+        }
+        if (options_.smoke) settings_.showModels = false;
+        if (options_.assetCheck) {
+            settings_.cameraYaw = settings_.cameraPitch = 0;
+            settings_.cameraDistance = 6; settings_.unlit = true;
+            settings_.models[0] = ModelPose{{0.5f,0,0},0,1};
+        }
         if (overlay_) {
             overlay_->Initialize(window_, renderer_, log_);
             overlayReady_ = true;
@@ -100,8 +133,8 @@ public:
             }
             if (windowError_) std::rethrow_exception(windowError_);
             if (!running_) break;
-            if (options_.smoke && Clock::now() > smokeDeadline) throw std::runtime_error("Smoke test stalled for 30 seconds");
-            if (options_.smoke) {
+            if ((options_.smoke || options_.assetSmoke) && Clock::now() > smokeDeadline) throw std::runtime_error("Smoke test stalled for 30 seconds");
+            if (options_.smoke || options_.assetSmoke) {
                 if (stats_.frames == 4 && !smokeResized_) { SetClientSize(960, 600); smokeResized_ = true; }
                 if (stats_.frames == 8 && !minimizedTest) {
                     minimizedTest = true;
@@ -125,6 +158,26 @@ public:
                 }
             }
             renderer_.Resize(pendingWidth_, pendingHeight_);
+            if (options_.assetCheck && !options_.assetUpdate.empty()) {
+                if (stats_.frames == 1 && !renderer_.ReloadModel(0,options_.assetUpdate))
+                    throw std::runtime_error("Changed fixture reload failed");
+                if (stats_.frames == 2) {
+                    const auto generation = renderer_.ModelGeneration(0);
+                    if (renderer_.ReloadModel(0,options_.assetUpdate.parent_path()/L"invalid.cmesh") || renderer_.ModelGeneration(0) != generation)
+                        throw std::runtime_error("Corrupt update replaced live model");
+                }
+            }
+            if (options_.assetSmoke && stats_.frames >= 16 && stats_.frames < 24) {
+                const auto generation = renderer_.ModelGeneration(0);
+                if (stats_.frames % 2 == 0) {
+                    if (!renderer_.ReloadModel(0,options_.assets[0]) || renderer_.ModelGeneration(0) != generation+1)
+                        throw std::runtime_error("Valid model reload failed");
+                } else {
+                    // A directory cannot be a valid cooked package. No user files are altered.
+                    if (renderer_.ReloadModel(0,options_.assets[0].parent_path()) || renderer_.ModelGeneration(0) != generation)
+                        throw std::runtime_error("Failed reload changed live model generation");
+                }
+            }
             const auto start = Clock::now();
             const double dt = std::chrono::duration<double>(start - previous).count();
             previous = start;
@@ -145,7 +198,7 @@ public:
             auto* list = renderer_.BeginFrame(settings_);
             if (overlay_) overlay_->Draw(list);
             const bool last = options_.frameLimit && stats_.frames + 1 >= options_.frameLimit;
-            const bool capture = last && (options_.smoke || !options_.capture.empty());
+            const bool capture = last && (options_.smoke || options_.assetSmoke || options_.assetCheck || !options_.capture.empty());
             const auto beforePresent = Clock::now();
             stats_.cpuWorkMs = std::chrono::duration<double, std::milli>(beforePresent - start).count();
             stats_.fenceWaitMs = renderer_.FenceWaitMs();
@@ -159,7 +212,7 @@ public:
                 CheckWin32(SetWindowTextW(window_, title.c_str()), "Update diagnostic title");
                 titleTime = 0;
             }
-            if (capture) renderer_.SaveCapture(options_.capture, options_.smoke);
+            if (capture) renderer_.SaveCapture(options_.capture, options_.smoke, options_.assetCheck, !options_.assetUpdate.empty());
             if (last) SendMessageW(window_, WM_CLOSE, 0, 0);
         }
         if (windowError_) std::rethrow_exception(windowError_);
@@ -170,10 +223,13 @@ public:
         renderer_.WaitIdle();
         if (options_.smoke && (!smokeResized_ || !smokeRestoredSize_ || !sawMinimize_ || !sawRestore_ || stats_.frames != 32))
             throw std::runtime_error("Smoke test lifecycle assertions failed");
+        if (options_.assetSmoke && (!smokeResized_ || !smokeRestoredSize_ || !sawMinimize_ || !sawRestore_ || stats_.frames != 32 || renderer_.ModelGeneration(0) != 5))
+            throw std::runtime_error("Asset smoke lifecycle/reload assertions failed");
         log_.Write(std::format("Shutdown: frames={}, Debug Layer errors={}, resize/minimize/restore={}/{}/{}",
             stats_.frames, renderer_.DiagnosticErrors(), smokeResized_, sawMinimize_, sawRestore_));
         if (renderer_.DiagnosticErrors()) return 1;
         if (options_.smoke) log_.Write("SMOKE PASS (pixel readback + window lifecycle + clean GPU drain)");
+        if (options_.assetSmoke) log_.Write("ASSET SMOKE PASS (4 replacements, 4 rejected updates, window lifecycle, GPU drain; inspect capture separately)");
         return 0;
     }
 private:
@@ -213,7 +269,7 @@ private:
             return 0;
         }
         case WM_TIMER:
-            if (w == 1 && options_.smoke) { KillTimer(window, 1); ShowWindow(window, SW_RESTORE); log_.Write("Smoke timer restored window"); }
+            if (w == 1 && (options_.smoke || options_.assetSmoke)) { KillTimer(window, 1); ShowWindow(window, SW_RESTORE); log_.Write("Smoke timer restored window"); }
             return 0;
         case WM_KILLFOCUS:
             input_.down.fill(false); input_.pressed.fill(false); input_.leftMouse = false;
@@ -273,7 +329,7 @@ int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay) {
                 std::format(L"{}-{}.log", name, GetCurrentProcessId());
         }
         log = std::make_unique<Log>(options.log);
-        log->Write("Starting " + Utf8(name) + " | C++20 | Phase 0A");
+        log->Write("Starting " + Utf8(name) + " | C++20 | Phase 0B");
         Application application(instance, name, overlay, *log, std::move(options));
         return application.Run();
     } catch (const std::exception& e) {

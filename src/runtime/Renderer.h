@@ -1,18 +1,28 @@
 #pragma once
 #include "runtime/Diagnostics.h"
+#include "assets/StaticAsset.h"
+#include <DirectXMath.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <array>
 #include <cstdint>
+#include <memory>
 
 namespace chromalis {
 using Microsoft::WRL::ComPtr;
+struct ModelPose {
+    std::array<float, 3> position{0,0,0};
+    float yaw = 0, scale = 1;
+};
 struct RenderSettings {
     std::array<float, 4> clear{0.055f, 0.07f, 0.11f, 1.0f};
     float x = 0, y = 0, scale = 1;
     bool vsync = true;
+    bool showModels = true, unlit = false;
+    float cameraYaw = 0.35f, cameraPitch = 0.25f, cameraDistance = 7;
+    std::array<ModelPose, 2> models{ModelPose{{-1.25f,0,0},0,0.7f}, ModelPose{{1.25f,0,0.6f},0.5f,0.7f}};
 };
 struct RendererOptions { bool warp = false, debug = false, gpuValidation = false; };
 
@@ -29,9 +39,12 @@ public:
     ID3D12GraphicsCommandList* BeginFrame(const RenderSettings& settings);
     bool EndFrame(bool vsync, bool capture);
     bool TestVisible();
-    void SaveCapture(const std::filesystem::path& path, bool verifyTriangle);
+    void SaveCapture(const std::filesystem::path& path, bool verifyTriangle, bool verifyAsset = false, bool updatedAsset = false);
     void WaitIdle();
     void DrainDiagnostics();
+    bool ReloadModel(size_t slot, const std::filesystem::path& path);
+    const std::string& AssetStatus() const { return assetStatus_; }
+    uint64_t ModelGeneration(size_t slot) const { return modelGenerations_.at(slot); }
     ID3D12Device* Device() const { return device_.Get(); }
     ID3D12CommandQueue* Queue() const { return queue_.Get(); }
     UINT64 CompletedFence() const;
@@ -50,6 +63,9 @@ private:
     };
     void CreateTargets();
     void CreatePipeline();
+    void CreateMeshPipeline();
+    void CreateDepth();
+    void DrawModels(const RenderSettings& settings);
     void WaitFor(UINT64 value);
     void Transition(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after);
     void PrepareCapture();
@@ -77,5 +93,22 @@ private:
     size_t diagnosticErrors_ = 0;
     double fenceWaitMs_ = 0;
     std::array<float, 4> lastClear_{};
+    struct GpuModel {
+        std::string id;
+        ComPtr<ID3D12Resource> vertex, index;
+        std::vector<ComPtr<ID3D12Resource>> textures;
+        ComPtr<ID3D12DescriptorHeap> srv, samplers;
+        D3D12_VERTEX_BUFFER_VIEW vb{};
+        D3D12_INDEX_BUFFER_VIEW ib{};
+        std::vector<MeshPart> parts;
+        std::vector<MeshMaterial> materials;
+    };
+    std::array<std::unique_ptr<GpuModel>, 2> models_;
+    std::array<uint64_t, 2> modelGenerations_{};
+    std::string assetStatus_ = "No cooked models loaded";
+    ComPtr<ID3D12Resource> depth_;
+    ComPtr<ID3D12DescriptorHeap> dsv_;
+    ComPtr<ID3D12RootSignature> meshRoot_;
+    std::array<ComPtr<ID3D12PipelineState>, 2> meshPso_;
 };
 }

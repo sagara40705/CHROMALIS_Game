@@ -123,6 +123,8 @@ void Renderer::Initialize(HWND window, UINT width, UINT height, const RendererOp
     Check(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frames_[0].allocator.Get(), nullptr, IID_PPV_ARGS(&list_)), "Create command list");
     Check(list_->Close(), "Close initial command list");
     CreatePipeline();
+    CreateMeshPipeline();
+    CreateDepth();
     DrainDiagnostics();
 }
 void Renderer::CreateTargets() {
@@ -202,11 +204,13 @@ void Renderer::Resize(UINT width, UINT height) {
     // Called only for nonzero client extents, between frames.
     WaitIdle();
     for (auto& target : targets_) target.Reset();
+    depth_.Reset();
     readback_.Reset();
     CheckDevice(swapChain_->ResizeBuffers(FrameCount, width, height, OutputFormat, 0), "Resize swap-chain buffers");
     width_ = width; height_ = height;
     CreateTargets();
     log_.Write(std::format("Resize completed: {}x{} (GPU idle before release)", width, height));
+    CreateDepth();
 }
 void Renderer::Transition(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
     D3D12_RESOURCE_BARRIER barrier{};
@@ -235,10 +239,17 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings) 
     const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(width_), static_cast<float>(height_), 0, 1};
     const D3D12_RECT rect{0, 0, static_cast<LONG>(width_), static_cast<LONG>(height_)};
     list_->RSSetViewports(1, &viewport); list_->RSSetScissorRects(1, &rect);
-    list_->SetGraphicsRootSignature(root_.Get());
-    list_->SetGraphicsRootConstantBufferView(0, frame.constants->GetGPUVirtualAddress());
     list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    list_->DrawInstanced(3, 1, 0, 0);
+    if (settings.showModels && (models_[0] || models_[1])) {
+        auto dsv = dsv_->GetCPUDescriptorHandleForHeapStart();
+        list_->OMSetRenderTargets(1,&rtv,FALSE,&dsv);
+        list_->ClearDepthStencilView(dsv,D3D12_CLEAR_FLAG_DEPTH,1,0,0,nullptr);
+        DrawModels(settings);
+    } else {
+        list_->SetGraphicsRootSignature(root_.Get());
+        list_->SetGraphicsRootConstantBufferView(0, frame.constants->GetGPUVirtualAddress());
+        list_->DrawInstanced(3, 1, 0, 0);
+    }
     return list_.Get();
 }
 void Renderer::PrepareCapture() {
@@ -276,7 +287,7 @@ bool Renderer::TestVisible() {
     CheckDevice(hr, "Test swap-chain visibility");
     return hr != DXGI_STATUS_OCCLUDED;
 }
-void Renderer::SaveCapture(const std::filesystem::path& path, bool verifyTriangle) {
+void Renderer::SaveCapture(const std::filesystem::path& path, bool verifyTriangle, bool verifyAsset, bool updatedAsset) {
     WaitIdle();
     std::vector<unsigned char> pixels(static_cast<size_t>(width_) * height_ * 4);
     unsigned char* mapped = nullptr;
@@ -320,6 +331,29 @@ void Renderer::SaveCapture(const std::filesystem::path& path, bool verifyTriangl
         stream.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
         if (!stream) throw std::runtime_error("Cannot save GPU capture: " + path.string());
         log_.Write("GPU capture saved: " + path.string());
+    }
+    if (verifyAsset) {
+        // Authored fixture: near textured quad drawn before a farther solid-blue quad.
+        // Camera at (0,0,-6), near quad z=-1, world x=0.5; FOV=45 degrees.
+        const float focal = static_cast<float>(height_) * 0.5f / std::tan(DirectX::XM_PIDIV4 * 0.5f);
+        const float distance = updatedAsset ? 4.0f : 5.0f;
+        const int cx = static_cast<int>(static_cast<float>(width_) * 0.5f + focal * 0.5f / distance);
+        const int cy = static_cast<int>(height_ / 2);
+        const int offset = static_cast<int>(focal * 0.8f / distance);
+        const int colors[4][3]{{0,0,255},{0,255,0},{255,0,0},{0,255,255}}; // BMP BGR
+        for (int q = 0; q < 4; ++q) {
+            const int x = cx + (q % 2 ? offset : -offset), y = cy + (q / 2 ? offset : -offset);
+            const auto at = (static_cast<size_t>(y)*width_+x)*4;
+            for (size_t c = 0; c < 3; ++c)
+                if (std::abs(static_cast<int>(pixels[at+c])-colors[q][c]) > 3)
+                    throw std::runtime_error("Asset pixels failed: UV/culling/depth/camera/world transform mismatch");
+        }
+        // A point outside the translated quad rejects accidentally omitted world translation.
+        const auto outside = (static_cast<size_t>(cy)*width_+static_cast<UINT>(static_cast<float>(width_)*0.5f-focal*0.75f/distance))*4;
+        for (size_t c = 0; c < 3; ++c)
+            if (std::abs(static_cast<int>(pixels[outside+c])-static_cast<int>(std::lround(lastClear_[2-c]*255))) > 2)
+                throw std::runtime_error("Asset world translation/background check failed");
+        log_.Write("ASSET PIXELS PASS: four UV quadrants, front-face culling, depth occlusion, camera projection and world translation");
     }
 }
 void Renderer::DrainDiagnostics() {
