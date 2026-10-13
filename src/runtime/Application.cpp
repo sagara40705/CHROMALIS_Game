@@ -124,6 +124,7 @@ public:
     Application(HINSTANCE instance, const wchar_t* name, Overlay* overlay, Log& log, Options options)
         : instance_(instance), name_(name), overlay_(overlay), log_(log), options_(std::move(options)), renderer_(log), scene_(renderer_, log) {}
     ~Application() {
+        playback_.Stop();
         try { renderer_.WaitIdle(); } catch (const std::exception& e) { log_.Write(e.what()); }
         if (overlay_) overlay_->Shutdown();
         overlayReady_ = false;
@@ -283,6 +284,7 @@ public:
             if (!overlay_) {
                 if (!options_.scene.empty()) playback_.Update(scene_, input_, sceneSeconds);
                 scene_.Update(sceneSeconds);
+                if (!options_.scene.empty()) playback_.AfterPose(scene_, input_, sceneSeconds);
                 if (!options_.scene.empty()) playback_.ConfigureView(scene_, settings_);
             }
             if (overlay_) overlay_->ConfigureView(settings_);
@@ -327,6 +329,7 @@ public:
             throw std::runtime_error("Smoke test lifecycle assertions failed");
         if (options_.assetSmoke && (!smokeResized_ || !smokeRestoredSize_ || !sawMinimize_ || !sawRestore_ || stats_.frames != 32 || legacyGenerations_.at(0) != 5))
             throw std::runtime_error("Asset smoke lifecycle/reload assertions failed");
+        playback_.Stop();
         scene_.Clear();
         log_.Write(std::format("Shutdown: frames={}, Debug Layer errors={}, resize/minimize/restore={}/{}/{}",
             stats_.frames, renderer_.DiagnosticErrors(), smokeResized_, sawMinimize_, sawRestore_));
@@ -458,11 +461,11 @@ private:
     HINSTANCE instance_;
     const wchar_t* name_;
     Overlay* overlay_;
-    ScenePlayback playback_;
     Log& log_;
     Options options_;
     Renderer renderer_;
     SceneRuntime scene_;
+    ScenePlayback playback_;
     LegacyPreview legacy_;
     std::array<uint64_t, 2> legacyGenerations_{};
     HWND window_ = nullptr;

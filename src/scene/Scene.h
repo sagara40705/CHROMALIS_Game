@@ -36,6 +36,14 @@ struct EffectInitialState {
     std::string joint;
     bool operator==(const EffectInitialState&) const = default;
 };
+struct BehaviourDefinition {
+    uint64_t id = 1;
+    std::string type;
+    uint32_t version = 1;
+    bool enabled = true;
+    // 未登録の型の設定も失わない。解釈と型検証はPlay開始時に行う。
+    std::string settings = "{}";
+};
 struct SceneEntity {
     EntityId id = 0, parent = 0;
     std::string name = "Object", asset;
@@ -44,6 +52,7 @@ struct SceneEntity {
     EffectInitialState effect;
     struct MaterialBinding { uint32_t slot = 0; std::string material; };
     std::vector<MaterialBinding> materials;
+    std::vector<BehaviourDefinition> behaviours;
 };
 struct SceneView {
     std::array<float, 4> background{0.055f, 0.07f, 0.11f, 1};
@@ -64,6 +73,7 @@ struct ScenePlaySettings {
 
 // 制作時の状態だけを保持する。再生中の時刻とGPU参照は保存しない。
 struct SceneDocument {
+    bool legacyBehaviours = true;
     EntityId nextId = 1;
     SceneView view;
     ScenePlaySettings play;
@@ -82,6 +92,7 @@ struct SceneDocument {
 DirectX::XMFLOAT4X4 LocalMatrix(const Transform& transform);
 void ValidateTransform(const Transform& transform);
 void ValidateScene(const SceneDocument& document);
+void MigrateSceneBehaviours(SceneDocument& document);
 std::vector<size_t> SceneOrder(const SceneDocument& document);
 std::vector<DirectX::XMFLOAT4X4> EvaluateWorlds(const SceneDocument& document, const std::vector<size_t>& order);
 SceneDocument LoadScene(const std::filesystem::path& path);

@@ -1,5 +1,9 @@
 # Scene再生・平面移動の契約
 
+## Behaviour移行後（Scene v7）
+
+現在はScenePlaybackが登録Behaviourの実行を管理し、以下のプレイヤー処理は`Gameplay/Behaviours/PlayerController`に移動した。v1〜6のplay設定は読み込み時にBehaviourへ移行し、v7ではEntityのbehavioursが実行設定の正本となる。設定場所はInspectorのBehaviour欄。詳細は[Behaviour契約](behaviours.md)。下記の操作・移動規約は移行後も維持する。
+
 Gameの`--scene`とEditorのPlayは同じ`ScenePlayback`を使う。Scene名・オブジェクト名・専用exeによる機能分岐は持たない。
 
 `.cscene` v5の`play`は、playerとcameraTarget（Entity IDの十進文字列、0は操作なし／固定カメラ）、walkSpeed/runSpeed/turnSpeed、forwardYaw、groundHeight、minimum/maximum（XZ）、clips（Idle/Walk/Runの順）、fixedTarget、cameraHeight/cameraFollowを持つ。角度はrad、距離m、時間s。カメラyaw/pitch/distanceは既存viewを使う。v1〜4は操作なしの固定カメラとして読み込み可能。

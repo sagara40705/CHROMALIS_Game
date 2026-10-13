@@ -1,4 +1,5 @@
 #include "gameplay/ScenePlayback.h"
+#include "PlayerController.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -75,7 +76,7 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
         renderer.EndFrame(false, capture != nullptr);
         if (capture) { renderer.SaveCapture(root/capture, false); CheckCapture(root/capture); }
         const auto& world = scene.World(1);
-        Require(std::abs(world._41-demo.Motion().position[0]) < 0.0001f && std::abs(world._43-demo.Motion().position[2]) < 0.0001f, "Runtime transform not evaluated");
+        Require(std::abs(world._41-dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[0]) < 0.0001f && std::abs(world._43-dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[2]) < 0.0001f, "Runtime transform not evaluated");
         Require(scene.Document().Entity(1).local == initial && !scene.Dirty(), "Simulation changed authoring state");
         Require(scene.Generation(1) == generation && scene.DrawItems().front().mesh == mesh && scene.Animation(1) == player, "Simulation rebuilt GPU asset/player");
     };
@@ -103,7 +104,7 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
         }
     }
     Require(player->Clips()[player->playback.clip].name == "Walk", "Walk clip");
-    Require(std::abs(std::hypot(demo.Motion().position[0], demo.Motion().position[2])-ScenePlaySettings{}.walkSpeed * walkFrames / 60) < 0.001f, "Walk distance");
+    Require(std::abs(std::hypot(dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[0], dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[2])-ScenePlaySettings{}.walkSpeed * walkFrames / 60) < 0.001f, "Walk distance");
     const auto walkPalette = player->Palette();
     input.down[VK_SHIFT] = true;
     for (int i = 0; i < 60; ++i) {
@@ -119,16 +120,16 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
         }
     }
     Require(player->Clips()[player->playback.clip].name == "Run", "Run clip");
-    Require(std::abs(std::hypot(demo.Motion().position[0], demo.Motion().position[2])-
+    Require(std::abs(std::hypot(dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[0], dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[2])-
         (ScenePlaySettings{}.walkSpeed * walkFrames / 60 + ScenePlaySettings{}.runSpeed)) < 0.001f, "Run distance");
     frame(input);
     Require(std::memcmp(walkPalette.data(), player->Palette().data(), walkPalette.size()*sizeof(XMFLOAT4X4)) != 0, "Animation palette never changed");
     input = {}; frame(input, "stopped.bmp");
     Require(player->Clips()[player->playback.clip].name == "Idle", "Stop clip");
-    const auto stopped = demo.Motion().position;
+    const auto stopped = dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position;
     input.down['E'] = true; input.down[VK_PRIOR] = true;
     for (int i = 0; i < 30; ++i) frame(input);
-    Require(demo.Motion().position == stopped && settings.cameraYaw > 0.5f && settings.cameraDistance < 7, "Camera controls moved player or failed");
+    Require(dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position == stopped && settings.cameraYaw > 0.5f && settings.cameraDistance < 7, "Camera controls moved player or failed");
     renderer.Resize(800,600); frame({});
     ShowWindow(window, SW_MINIMIZE); Pump(); Require(IsIconic(window), "Minimize failed");
     ShowWindow(window, SW_RESTORE); Pump(); Require(!IsIconic(window), "Restore failed");

@@ -71,6 +71,7 @@ SceneRuntime::~SceneRuntime() {
 const SceneDocument& SceneRuntime::Document() const { return state_->document; }
 bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
     try {
+        MigrateSceneBehaviours(document);
         ValidateScene(document);
         renderer_.WaitIdle();
         auto candidate = std::make_unique<State>();
@@ -305,6 +306,9 @@ void SceneRuntime::Update(float seconds) {
 void SceneRuntime::SetRuntimeTransform(EntityId entity, const Transform& transform) {
     ValidateTransform(transform);
     state_->locals.at(state_->indices.at(entity)) = transform;
+}
+const Transform& SceneRuntime::RuntimeTransform(EntityId entity) const {
+    return state_->locals.at(state_->indices.at(entity));
 }
 void SceneRuntime::UpdateState(State& state, float seconds, bool advance) {
     using namespace DirectX;

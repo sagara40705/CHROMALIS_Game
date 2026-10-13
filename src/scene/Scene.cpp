@@ -138,7 +138,7 @@ void ValidateScene(const SceneDocument& document) {
         std::isfinite(play.cameraHeight) && std::isfinite(play.cameraFollow) && play.cameraFollow > 0 && play.cameraFollow <= 100,
         "Invalid Scene play speeds/plane/camera");
     Require(play.minimum[0] < play.maximum[0] && play.minimum[1] < play.maximum[1], "Invalid movement bounds");
-    if (play.player) {
+    if (document.legacyBehaviours && play.player) {
         const auto& player = document.Entity(play.player);
         Require(!player.parent && !player.asset.empty() && document.Asset(player.asset).kind == SceneAssetKind::Skeletal,
             "Controlled player must be a root skeletal object");
@@ -167,6 +167,13 @@ void ValidateScene(const SceneDocument& document) {
     }
     const auto order = SceneOrder(document);
     for (const auto& entity : document.entities) {
+        Require(entity.behaviours.size() <= 128, "Too many Behaviours on an entity");
+        std::unordered_set<uint64_t> behaviourIds;
+        for (const auto& behaviour : entity.behaviours) {
+            Require(behaviour.id && behaviour.id < UINT64_MAX && behaviourIds.insert(behaviour.id).second, "Invalid/duplicate Behaviour ID");
+            Require(!behaviour.type.empty() && behaviour.type.size() <= 128 && behaviour.version > 0, "Invalid Behaviour type/version");
+            Require(behaviour.settings.size() <= 65536, "Behaviour settings exceed 64 KiB");
+        }
         Require(entity.materials.size() <= 4096, "Too many material bindings");
         std::unordered_set<uint32_t> slots;
         for (const auto& binding : entity.materials) {

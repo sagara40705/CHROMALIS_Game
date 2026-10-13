@@ -1,21 +1,30 @@
 #pragma once
-#include "gameplay/PlayerMotion.h"
-#include "runtime/Input.h"
-#include "scene/SceneRuntime.h"
+#include "gameplay/Behaviour.h"
 
 namespace chromalis {
-// GameとEditorのPlayが共用する実行状態。保存用Sceneを変更しない。
+// Playごとのロジック実体だけを所有する。Sceneより先に終了する。
 class ScenePlayback final {
 public:
-    void Initialize(SceneRuntime& scene);
+    ~ScenePlayback() { Stop(); }
+    ScenePlayback() = default;
+    ScenePlayback(const ScenePlayback&) = delete;
+    ScenePlayback& operator=(const ScenePlayback&) = delete;
+    ScenePlayback(ScenePlayback&& other) noexcept;
+    ScenePlayback& operator=(ScenePlayback&& other) noexcept;
+    void Initialize(SceneRuntime& scene, const BehaviourRegistry& registry = GameBehaviours());
     void Update(SceneRuntime& scene, const InputState& input, float seconds);
+    void AfterPose(SceneRuntime& scene, const InputState& input, float seconds);
     void ConfigureView(const SceneRuntime& scene, RenderSettings& settings) const;
-    const PlayerMotion& Motion() const { return motion_; }
+    void Stop() noexcept;
+    const Behaviour* Find(EntityId entity, const std::string& type) const;
 private:
-    PlayerMotion motion_;
-    EntityId player_ = 0;
-    Transform initial_;
-    std::array<int, 3> clips_{};
-    Locomotion previous_ = Locomotion::Idle;
+    struct Instance {
+        EntityId entity;
+        std::string type;
+        std::unique_ptr<Behaviour> behaviour;
+        bool started = false;
+    };
+    std::vector<Instance> instances_;
+    SceneRuntime* scene_ = nullptr;
 };
 }

@@ -46,7 +46,7 @@ bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 Json Encode(const SceneDocument& document, const std::filesystem::path& destination) {
-    Json root{{"version", 6}, {"nextId", std::to_string(document.nextId)}};
+    Json root{{"version", 7}, {"nextId", std::to_string(document.nextId)}};
     const auto& view = document.view;
     const auto& p = document.play;
     root["play"] = {{"player", std::to_string(p.player)}, {"cameraTarget", std::to_string(p.cameraTarget)},
@@ -85,6 +85,12 @@ Json Encode(const SceneDocument& document, const std::filesystem::path& destinat
             {"transform", {{"position", entity.local.position}, {"rotation", entity.local.rotation}, {"scale", entity.local.scale}}},
             {"animation", {{"library", a.library}, {"clip", a.clip}, {"time", a.time}, {"speed", a.speed}, {"loop", a.loop}, {"autoplay", a.autoplay}, {"restPose", a.restPose}, {"bindPose", a.bindPose}}},
             {"effect", {{"count", e.count}, {"autoplay", e.autoplay}, {"follow", std::to_string(e.follow)}, {"joint", e.joint}}}});
+        auto& behaviours = root["entities"].back()["behaviours"] = Json::array();
+        for (const auto& b : entity.behaviours) {
+            const auto settings = Json::parse(b.settings);
+            if (!settings.is_object()) throw std::runtime_error("Behaviour settings must be an object");
+            behaviours.push_back({{"id", std::to_string(b.id)}, {"type", b.type}, {"version", b.version}, {"enabled", b.enabled}, {"settings", settings}});
+        }
         auto& bindings = root["entities"].back()["materials"] = Json::array();
         for (const auto& binding : entity.materials) bindings.push_back({{"slot", binding.slot}, {"material", binding.material}});
     }
@@ -99,8 +105,9 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open scene");
         const auto root = Json::parse(stream);
-        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4 && root.at("version") != 5 && root.at("version") != 6) throw std::runtime_error("Unsupported scene version");
+        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4 && root.at("version") != 5 && root.at("version") != 6 && root.at("version") != 7) throw std::runtime_error("Unsupported scene version");
         SceneDocument document;
+        document.legacyBehaviours = root.at("version") < 7;
         document.nextId = Id(root.at("nextId"));
         if (root.at("version") >= 5) {
             const auto& value = root.at("play"); auto& p = document.play;
@@ -184,15 +191,43 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
                     entity.materials.push_back({slot.get<uint32_t>(), binding.at("material").get<std::string>()});
                 }
             }
+            if (root.at("version") >= 7) {
+                const auto& behaviours = value.at("behaviours");
+                if (!behaviours.is_array() || behaviours.size() > 128) throw std::runtime_error("Invalid Behaviour collection");
+                for (const auto& b : behaviours) {
+                    if (!b.at("settings").is_object() || !b.at("version").is_number_unsigned() || b.at("version").get<uint64_t>() > UINT32_MAX)
+                        throw std::runtime_error("Invalid Behaviour settings/version");
+                    entity.behaviours.push_back({Id(b.at("id")), b.at("type").get<std::string>(), b.at("version").get<uint32_t>(), b.at("enabled").get<bool>(), b.at("settings").dump()});
+                }
+            }
             document.entities.push_back(std::move(entity));
         }
+        MigrateSceneBehaviours(document);
         ValidateScene(document);
         return document;
     } catch (const std::exception& error) {
         throw std::runtime_error("Scene " + Text(path) + ": " + error.what());
     }
 }
-void SaveScene(const SceneDocument& document, const std::filesystem::path& path) {
+void MigrateSceneBehaviours(SceneDocument& document) {
+    if (!document.legacyBehaviours) return;
+    if (document.play.player) {
+        const auto& p = document.play;
+        Json settings{{"walkSpeed", p.walkSpeed}, {"runSpeed", p.runSpeed}, {"turnSpeed", p.turnSpeed},
+            {"forwardYaw", p.forwardYaw}, {"groundHeight", p.groundHeight},
+            {"minX", p.minimum[0]}, {"minZ", p.minimum[1]}, {"maxX", p.maximum[0]}, {"maxZ", p.maximum[1]},
+            {"idleClip", p.clips[0]}, {"walkClip", p.clips[1]}, {"runClip", p.clips[2]},
+            {"cameraTarget", std::to_string(p.cameraTarget)}, {"cameraHeight", p.cameraHeight}, {"cameraFollow", p.cameraFollow}};
+        auto& entity = document.Entity(p.player);
+        uint64_t id = 1;
+        for (const auto& b : entity.behaviours) id = std::max(id, b.id + 1);
+        entity.behaviours.push_back({id, "chromalis.player", 1, true, settings.dump()});
+    }
+    document.legacyBehaviours = false;
+}
+void SaveScene(const SceneDocument& source, const std::filesystem::path& path) {
+    auto document = source;
+    MigrateSceneBehaviours(document);
     if (path.extension() != L".cscene") throw std::runtime_error("Scene output must use .cscene extension");
     ValidateScene(document);
     const auto text = Encode(document, path).dump(2) + "\n";

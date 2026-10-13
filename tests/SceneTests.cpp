@@ -126,7 +126,7 @@ void Persistence(const std::filesystem::path& root) {
     std::filesystem::remove(alias);
     Reject([&] { SaveScene(scene, root / "texture.png"); });
     auto malformed = bytes;
-    const auto version = malformed.find("\"version\": 6");
+    const auto version = malformed.find("\"version\": 7");
     Require(version != std::string::npos, "Missing schema version");
     malformed.replace(version, 12, "\"version\": 9");
     { std::ofstream file(root / "bad.cscene"); file << malformed; }

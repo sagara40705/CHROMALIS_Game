@@ -1,6 +1,6 @@
 # 最小Sceneの契約
 
-現在の保存版はv6。v5のPlay設定にPBR/Blend材質値を追加し、v1〜5の読み込みを維持する。材質詳細は[materials.md](materials.md)。
+現在の保存版はv7。v6のPBR/Blend材質にBehaviour設定を追加し、v1〜6の読み込みを維持する。材質詳細は[materials.md](materials.md)。
 
 ## 所有権と依存
 
@@ -32,7 +32,7 @@ ReparentはLocal維持で、Worldは変化する。Deleteは子孫も削除す�
 
 ## 保存・読み込み・更新
 
-`.cscene`はUTF-8 JSON。共通Animation参照・共有材質・照明・投影影設定を含むversion=5で保存し、旧version=1/2/3/4も読み込む。v5ではplayに操作対象・カメラ対象・Clip・平面移動設定を保存する。材質の契約は[materials.md](materials.md)を参照。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
+`.cscene`はUTF-8 JSON。共通Animation参照・共有材質・照明・投影影・Behaviour設定を含むversion=7で保存し、旧version=1〜6も読み込む。v5ではplayに操作対象・カメラ対象・Clip・平面移動設定を保存する。材質の契約は[materials.md](materials.md)を参照。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
 
 Entity IDは64bitの十進文字列。Asset表はID・static/skeletal/effect/animation・Sceneファイルからの相対パスを持つ。cmesh/cskin/canim内のIDとの一致も読み込み時に検査する。共通Skeleton・Clipの所有と互換性は[shared-animation.md](shared-animation.md)を参照。絶対パスは保存せず、Save Asで相対パスを再計算する。同一ボリューム上の配置を要求する。Sceneは信頼するローカル制作物であり、相対パスの`..`は許可する。
 
