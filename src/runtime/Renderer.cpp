@@ -365,9 +365,9 @@ void Renderer::SaveCapture(const std::filesystem::path& path, bool verifyTriangl
     D3D12_RANGE noWrite{0, 0};
     readback_->Unmap(0, &noWrite);
     if (verifyTriangle) {
-        // Right-side interior is away from the editor. A clear-only frame must fail.
+        // 固定Editorパネルに隠れない三角形内部と上側の背景を検証する。Clearだけの描画は失敗する。
         const auto at = (static_cast<size_t>(height_ / 2) * width_ + static_cast<UINT>(static_cast<float>(width_) * 0.675f)) * 4;
-        const auto bg = (static_cast<size_t>(height_ - 5) * width_ + width_ - 5) * 4;
+        const auto bg = (static_cast<size_t>(height_ / 5) * width_ + width_ / 2) * 4;
         if (pixels[at] < 50 || pixels[at + 1] < 50 || pixels[at + 2] < 50)
             throw std::runtime_error("GPU readback: expected colored triangle interior, found background/invalid pixels");
         for (size_t c = 0; c < 3; ++c) {
