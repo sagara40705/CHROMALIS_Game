@@ -34,6 +34,8 @@ struct EffectInitialState {
     bool autoplay = true;
     EntityId follow = 0;
     std::string joint;
+    // 旧シーンの位置のみ追従を維持する。オンならオフセットもSocket座標系になる。
+    bool followTransform = false;
     bool operator==(const EffectInitialState&) const = default;
 };
 struct BehaviourDefinition {

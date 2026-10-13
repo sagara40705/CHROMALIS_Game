@@ -13,7 +13,7 @@ ApplicationがRendererとSceneRuntimeを所有する。SceneRuntimeはRenderer�
 | Renderer | Device/Queue/Fence、共有MeshHandleに対応するGPU VB/IB/Texture/Descriptor、フレーム別Upload、Swap Chain/Depth、要求時のScene Color/Depth |
 | EditorOverlay / EditorSession | 選択ID、編集カメラ、入力欄、ImGui/SRV、Play用Sceneコピー。編集用Sceneの正本は借用する |
 
-SceneDocument/SceneIOはD3D12とImGuiに依存しない。SceneRuntimeがCPUデータを読みRendererにGPU生成を依頼する。MeshHandleはslot+generationであり、永続Asset IDとは別物。同じAsset IDの静的/骨格メッシュは共有し、骨格の再生時刻・姿勢は個体ごとに持つ。VFXは既存のEffekseer接続を維持し、オブジェクトごとにVfxPlayerを持つため、大量配置向けの共有Manager設計ではない。
+SceneDocument/SceneIOはD3D12とImGuiに依存しない。SceneRuntimeがCPUデータを読みRendererにGPU生成を依頼する。MeshHandleはslot+generationであり、永続Asset IDとは別物。同じAsset IDの静的/骨格メッシュは共有し、骨格の再生時刻・姿勢は個体ごとに持つ。VFXはオブジェクトごとに再生ハンドルを持ち、同じAsset IDのManager・描画器・リソースを共有する。詳細は[vfx-runtime.md](vfx-runtime.md)。
 
 ## Transformと更新順序
 
@@ -24,7 +24,7 @@ Simulationは`SetRuntimeTransform`で保存用Localと別の実行用Localを更
 1. フレーム境界でEditor操作、同期reloadを適用する。
 2. AnimationPlayerがCPU姿勢とPaletteを更新する。DocumentのStart timeは初期値で、再生中の時刻とは別。
 3. 親とSocket参照先が先になる順序でWorldを確定する。
-4. VFXのWorldを確定して演出を更新する。Root VFXのみ他の骨格オブジェクトのJoint名を参照し、位置だけに追従する。Local位置はWorld軸のオフセット。回転とScaleは継承しない。
+4. VFXのWorldを確定して演出を更新する。Root VFXのみ他の骨格オブジェクトのJoint名を参照し、位置のみ、または回転・Scaleを含む完全追従を選べる。完全追従時のLocal位置はSocket座標系のオフセット。
 5. RendererはフレームFence完了後にUploadを更新し、借用した描画リストを消費する。各骨格drawは別の256-byte整列Palette領域を使用する。
 6. 不透明モデル→VFX→UNORM RTVでImGui→Present。
 
@@ -32,7 +32,7 @@ ReparentはLocal維持で、Worldは変化する。Deleteは子孫も削除す�
 
 ## 保存・読み込み・更新
 
-`.cscene`はUTF-8 JSON。共通Animation参照・共有材質・照明・投影影・Behaviour設定を含むversion=7で保存し、旧version=1〜6も読み込む。v5ではplayに操作対象・カメラ対象・Clip・平面移動設定を保存する。材質の契約は[materials.md](materials.md)を参照。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
+`.cscene`はUTF-8 JSON。共通Animation参照・共有材質・照明・投影影・Behaviour設定を含むversion=8で保存し、旧version=1〜7も読み込む。v5ではplayに操作対象・カメラ対象・Clip・平面移動設定を保存する。材質の契約は[materials.md](materials.md)を参照。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
 
 Entity IDは64bitの十進文字列。Asset表はID・static/skeletal/effect/animation・Sceneファイルからの相対パスを持つ。cmesh/cskin/canim内のIDとの一致も読み込み時に検査する。共通Skeleton・Clipの所有と互換性は[shared-animation.md](shared-animation.md)を参照。絶対パスは保存せず、Save Asで相対パスを再計算する。同一ボリューム上の配置を要求する。Sceneは信頼するローカル制作物であり、相対パスの`..`は許可する。
 
@@ -63,7 +63,7 @@ EditorはScene pathのNew/Open/Save/Save As/Reload、Hierarchyの追加・親変
 
 ## 制限
 
-Undo/Redo、Prefab、非同期Streaming、汎用ECSは未実装。Scene APIはメインスレッドのフレーム境界で使い、DrawItemの参照を次の編集/更新まで保持しない。Socketは位置追従だけ。VFX同時数の間隔は従来の検証用World Xオフセットを維持する。日本語コメントを使用するがImGuiの日本語フォントは未導入。Scene JSONの日本語名・パスは保持できるがUI上の日本語名表示は未対応。
+Undo/Redo、Prefab、非同期Streaming、汎用ECSは未実装。Scene APIはメインスレッドのフレーム境界で使い、DrawItemの参照を次の編集/更新まで保持しない。Socketは位置のみ/完全追従を選択可能。VFX同時数の間隔は従来の検証用World Xオフセットを維持する。日本語コメントを使用するがImGuiの日本語フォントは未導入。Scene JSONの日本語名・パスは保持できるがUI上の日本語名表示は未対応。
 
 Editorは専用Scene Viewとギズモ、CPU三角形選択を提供する。Pickは読み込み済みの静的位置/Index、骨格の現在Paletteを使う。クリック時のみ姿勢を計算し、GPU readbackは不要。負Scale・Local TRSに戻せないShearを伴うギズモ変更は拒否する。Alpha抜きや裏面カリングは選択判定に含まない。
 

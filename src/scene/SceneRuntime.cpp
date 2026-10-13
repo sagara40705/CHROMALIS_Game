@@ -14,6 +14,7 @@ struct LoadedAsset {
     MeshHandle mesh;
     std::shared_ptr<const SkeletalAsset> skeleton;
     std::shared_ptr<const AnimationRig> rig;
+    std::unique_ptr<VfxPlayer> effect;
     std::vector<DirectX::XMFLOAT3> pickVertices;
     std::vector<uint32_t> pickIndices;
     uint64_t generation = 0;
@@ -61,6 +62,7 @@ struct SceneRuntime::State {
     std::vector<size_t> parents, follows, joints;
     std::vector<DrawItem> draws;
     std::vector<std::vector<MaterialSurface>> materials;
+    std::vector<VfxPlayer*> effectGroups;
 };
 
 SceneRuntime::SceneRuntime(Renderer& renderer, Log& log) : renderer_(renderer), log_(log), state_(std::make_unique<State>()) {}
@@ -106,8 +108,8 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
                 asset->rig = std::make_shared<const AnimationRig>(std::move(library));
             } else {
                 // 未配置アセットも制作物として読めることを確認する。
-                VfxPlayer validation(renderer_.Device(), renderer_.Queue(), Renderer::SceneFormat);
-                if (!validation.Reload(source.path)) throw std::runtime_error(validation.Status());
+                asset->effect = std::make_unique<VfxPlayer>(renderer_.Device(), renderer_.Queue(), Renderer::SceneFormat);
+                if (!asset->effect->Reload(source.path)) throw std::runtime_error(asset->effect->Status());
             }
             candidate->assets.emplace(source.id, std::move(asset));
         }
@@ -151,9 +153,11 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
                         instance->animationAsset ? instance->animationAsset->rig : instance->asset->rig);
                     SetInitialState(*instance->animation, entity.animation);
                 } else if (instance->asset->source.kind == SceneAssetKind::Effect) {
-                    instance->effect = std::make_unique<VfxPlayer>(renderer_.Device(), renderer_.Queue(), Renderer::SceneFormat);
-                    if (!instance->effect->Reload(instance->asset->source.path)) throw std::runtime_error(instance->effect->Status());
-                    if (entity.effect.autoplay) instance->effect->Play(entity.effect.count);
+                    instance->effect = std::make_unique<VfxPlayer>(*instance->asset->effect);
+                    if (entity.effect.autoplay) {
+                        instance->effect->Play(entity.effect.count);
+                        if (instance->effect->Instances() != entity.effect.count) throw std::runtime_error(instance->effect->Status());
+                    }
                 }
             }
             candidate->instances.push_back(std::move(instance));
@@ -166,6 +170,9 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
             candidate->joints.push_back(target == SIZE_MAX ? 0 : FindJoint(*candidate->instances[target]->animation, entity.effect.joint));
         }
         candidate->worlds = EvaluateWorlds(candidate->document, candidate->order);
+        // アセットの定義順で一度だけ描画する。配置数分のManager更新とフレーム領域を作らない。
+        for (const auto& asset : candidate->document.assets)
+            if (auto* effect = candidate->assets.at(asset.id)->effect.get()) candidate->effectGroups.push_back(effect);
         candidate->draws.reserve(candidate->instances.size());
         UpdateState(*candidate, 0, false);
         renderer_.WaitIdle();
@@ -286,6 +293,25 @@ bool SceneRuntime::Delete(EntityId entity) {
     for (auto& remaining : document.entities) {
         if (Document().Entity(remaining.id).effect.follow && !remaining.effect.follow) {
             const auto& world = World(remaining.id);
+            if (Document().Entity(remaining.id).effect.followTransform) {
+                using namespace DirectX;
+                XMVECTOR scale, rotation, translation;
+                if (!XMMatrixDecompose(&scale, &rotation, &translation, XMLoadFloat4x4(&world))) {
+                    status_ = "Cannot detach a sheared socket transform; remove socket following first";
+                    return false;
+                }
+                XMFLOAT3 s; XMFLOAT4 r;
+                XMStoreFloat3(&s, scale); XMStoreFloat4(&r, rotation);
+                remaining.local.scale = {s.x, s.y, s.z};
+                remaining.local.rotation = {r.x, r.y, r.z, r.w};
+                remaining.local.position = {world._41, world._42, world._43};
+                const auto reconstructed = LocalMatrix(remaining.local);
+                for (int row = 0; row < 4; ++row) for (int column = 0; column < 4; ++column)
+                    if (std::abs(reconstructed.m[row][column] - world.m[row][column]) > 0.0001f * std::max(1.0f, std::abs(world.m[row][column]))) {
+                        status_ = "Cannot detach a sheared socket transform; remove socket following first";
+                        return false;
+                    }
+            }
             remaining.local.position = {world._41, world._42, world._43};
         }
     }
@@ -326,12 +352,17 @@ void SceneRuntime::UpdateState(State& state, float seconds, bool advance) {
             if (entity.effect.follow) {
                 const auto index = state.follows[i];
                 const auto& target = *state.instances[index]->animation;
-                const auto socket = target.Socket(state.joints[i], state.worlds[index]);
-                state.worlds[i]._41 += socket.x;
-                state.worlds[i]._42 += socket.y;
-                state.worlds[i]._43 += socket.z;
+                const auto socket = target.SocketTransform(state.joints[i], state.worlds[index]);
+                if (entity.effect.followTransform) {
+                    // ローカルオフセット→Joint姿勢→対象Worldの順。行列のまま渡し非一様スケールも保持する。
+                    XMStoreFloat4x4(&state.worlds[i], world * XMLoadFloat4x4(&socket));
+                } else {
+                    state.worlds[i]._41 += socket._41;
+                    state.worlds[i]._42 += socket._42;
+                    state.worlds[i]._43 += socket._43;
+                }
             }
-            if (advance) instance.effect->UpdateMatrix(seconds, state.worlds[i]);
+            if (advance) instance.effect->SetWorld(state.worlds[i]);
         } else {
             DrawItem item{instance.asset->mesh, state.worlds[i], {}, {}, state.materials[i]};
             if (instance.animation) {
@@ -341,6 +372,7 @@ void SceneRuntime::UpdateState(State& state, float seconds, bool advance) {
             state.draws.push_back(item);
         }
     }
+    if (advance) for (auto* effect : state.effectGroups) effect->Update(seconds);
 }
 std::span<const DrawItem> SceneRuntime::DrawItems() const { return state_->draws; }
 std::span<const MeshMaterial> SceneRuntime::ImportedMaterials(EntityId entity) const {
@@ -357,8 +389,8 @@ size_t SceneRuntime::MaterialUseCount(EntityId entity, uint32_t slot) const {
     return !asset || asset->mesh.slot == UINT32_MAX ? 0 : renderer_.MaterialUseCount(asset->mesh, slot);
 }
 void SceneRuntime::DrawEffects(ID3D12GraphicsCommandList* commands) {
-    for (const auto& instance : state_->instances)
-        if (instance->effect) instance->effect->Draw(renderer_.CurrentFrame(), commands, renderer_.View(), renderer_.Projection());
+    for (auto* effect : state_->effectGroups)
+        effect->Draw(renderer_.CurrentFrame(), commands, renderer_.View(), renderer_.Projection());
 }
 AnimationPlayer* SceneRuntime::Animation(EntityId entity) {
     const auto found = state_->indices.find(entity);

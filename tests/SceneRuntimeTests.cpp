@@ -229,6 +229,112 @@ SceneDocument Example(const std::filesystem::path& cube, const std::filesystem::
     document.Entity(vfx).local.scale = {0.2f, 0.2f, 0.2f};
     return document;
 }
+void SocketFollowing(Renderer& renderer, SceneRuntime& scene, SceneDocument document) {
+    using namespace DirectX;
+    document.Entity(1).local.scale = {1.5f, 1.5f, 1.5f};
+    document.Entity(1).local.rotation = {0, std::sin(0.3f), 0, std::cos(0.3f)};
+    document.Entity(5).local.scale = {0.8f, 1.2f, 0.7f};
+    document.Entity(7).local.position = {0.3f, 0.4f, -0.2f};
+    document.Entity(7).effect.followTransform = true;
+    Require(scene.Apply(document), "Socket TRS apply failed");
+    for (int frame = 0; frame < 5; ++frame) {
+        Frame(renderer, scene);
+        const auto socket = scene.Animation(5)->SocketTransform(0, scene.World(5));
+        const auto local = LocalMatrix(document.Entity(7).local);
+        XMFLOAT4X4 expected;
+        XMStoreFloat4x4(&expected, XMLoadFloat4x4(&local) * XMLoadFloat4x4(&socket));
+        for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c)
+            Require(std::abs(scene.World(7).m[r][c] - expected.m[r][c]) < 0.0001f, "Socket full matrix mismatch");
+    }
+    document.Entity(7).local.rotation = {0, 0, std::sin(0.4f), std::cos(0.4f)};
+    Require(scene.Apply(document), "Sheared socket setup failed");
+    const auto revision = scene.Revision();
+    Require(!scene.Delete(5) && scene.Revision() == revision && scene.Document().Entity(7).effect.follow == 5,
+        "Sheared detach must retain the scene");
+    document.Entity(7).local.rotation = {0, 0, 0, 1};
+    // 非一様スケールを外したTRSは、追従先削除後も姿勢を保って独立できる。
+    document.Entity(5).local.scale = {1, 1, 1};
+    Require(scene.Apply(document), "Socket detach setup failed");
+    scene.Update(0);
+    const auto before = scene.World(7);
+    Require(scene.Delete(5), "Socket TRS detach failed");
+    for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c)
+        Require(std::abs(scene.World(7).m[r][c] - before.m[r][c]) < 0.0001f, "Detach lost rotation or scale");
+}
+void VfxBatch(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& path, const std::filesystem::path& root) {
+    scene.Clear();
+    // 同条件の非共有方式も測り、更新・描画の集約効果を分離する。数値は合格基準にしない。
+    for (const bool shared : {false, true}) {
+        constexpr int count = 16;
+        const auto loadStart = std::chrono::steady_clock::now();
+        std::vector<std::unique_ptr<VfxPlayer>> resources, players;
+        for (int i = 0; i < (shared ? 1 : count); ++i) {
+            auto resource = std::make_unique<VfxPlayer>(renderer.Device(), renderer.Queue(), Renderer::SceneFormat);
+            Require(resource->Reload(path), "VFX benchmark load failed");
+            resources.push_back(std::move(resource));
+        }
+        for (int i = 0; i < count; ++i) {
+            auto player = std::make_unique<VfxPlayer>(*resources[shared ? 0 : i]);
+            player->Play(1);
+            Transform transform;
+            transform.position = {(i % 4 - 1.5f) * 0.7f, (i / 4 - 1.5f) * 0.7f, 0};
+            transform.scale = {0.25f, 0.25f, 0.25f};
+            player->SetWorld(LocalMatrix(transform));
+            players.push_back(std::move(player));
+        }
+        const double loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
+        double updateMs = 0, submitMs = 0, gpuMs = 0;
+        int drawCalls = 0;
+        for (int frame = 0; frame < 30; ++frame) {
+            const auto updateStart = std::chrono::steady_clock::now();
+            for (const auto& resource : resources) resource->Update(1.0f / 60);
+            updateMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - updateStart).count();
+            RenderSettings settings; settings.cameraDistance = 5;
+            auto* commands = renderer.BeginFrame(settings, {});
+            const auto drawStart = std::chrono::steady_clock::now();
+            for (const auto& resource : resources) resource->Draw(renderer.CurrentFrame(), commands, renderer.View(), renderer.Projection());
+            submitMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - drawStart).count();
+            renderer.BeginOverlay(); renderer.EndFrame(false, frame == 15);
+            if (frame == 15) {
+                for (const auto& resource : resources) drawCalls += resource->DrawCalls();
+                renderer.SaveCapture(root / (shared ? "vfx-shared.bmp" : "vfx-isolated.bmp"), false);
+            }
+            if (frame >= 2) gpuMs += renderer.GpuFrameMs();
+        }
+        Require(drawCalls > 0 && players[1]->Particles() > 0, "VFX batch did not render");
+        const int particles = players[1]->Particles();
+        players[0]->Stop();
+        for (const auto& resource : resources) resource->Update(0);
+        Require(players[0]->Instances() == 0 && players[1]->Instances() == 1 && players[1]->Particles() == particles, "Stop affected sibling VFX");
+        std::cout << "VFX " << (shared ? "shared" : "isolated") << " count=" << count << " load ms=" << loadMs
+            << " update ms=" << updateMs / 30 << " submit ms=" << submitMs / 30 << " frame GPU ms=" << gpuMs / 28 << " draws=" << drawCalls << '\n';
+        renderer.WaitIdle();
+    }
+    Require(ReadAssetBytes(root / "vfx-shared.bmp") == ReadAssetBytes(root / "vfx-isolated.bmp"), "Shared VFX changed rendered pixels");
+    SceneDocument document;
+    document.assets.push_back({"vfx/batch", SceneAssetKind::Effect, path});
+    for (int i = 0; i < 64; ++i) {
+        const auto id = document.Add("Effect");
+        document.Entity(id).asset = "vfx/batch";
+        document.Entity(id).local.position = {float(i % 8), 0, float(i / 8)};
+    }
+    Require(scene.Apply(document), "64 VFX placements failed");
+    Frame(renderer, scene);
+    const auto first = scene.Effect(1);
+    Require(first->SharedParticles() > first->Particles(), "Scene did not share VFX resources");
+    auto invalid = document;
+    invalid.Entity(64).effect.follow = 1;
+    Require(!scene.Apply(invalid) && scene.Effect(1) == first && first->Instances() == 1, "Failed scene changed VFX playback");
+    Require(!scene.ReloadAsset("vfx/batch", root / "missing.efkefc") && scene.Effect(1) == first, "Failed reload lost shared VFX");
+    Require(scene.ReloadAsset("vfx/batch"), "Shared VFX reload failed");
+    Frame(renderer, scene);
+    scene.Effect(1)->Stop(); Frame(renderer, scene);
+    Require(scene.Effect(1)->Instances() == 0 && scene.Effect(2)->Instances() == 1, "Scene stop affected sibling");
+    Require(scene.Delete(1), "Delete shared VFX failed");
+    Frame(renderer, scene);
+    Require(scene.Effect(2)->Instances() == 1, "Delete stopped sibling");
+    scene.Clear();
+}
 void Transactions(Renderer& renderer, SceneRuntime& scene, const SceneDocument& example, const std::filesystem::path& root) {
     Require(scene.Apply(example), "Example scene failed");
     Require(scene.Save(root / "Example.cscene"), "Scene save failed");
@@ -304,6 +410,8 @@ int wmain(int argc, wchar_t** argv) {
         Frame(renderer, scene);
         NormalTransform(renderer, scene, std::filesystem::absolute(argv[4]), root);
         Materials(renderer, scene, std::filesystem::absolute(argv[4]), root);
+        SocketFollowing(renderer, scene, Example(cube, std::filesystem::absolute(argv[3]), std::filesystem::absolute(argv[5])));
+        VfxBatch(renderer, scene, std::filesystem::absolute(argv[5]), root);
         Transactions(renderer, scene, Example(cube, std::filesystem::absolute(argv[3]), std::filesystem::absolute(argv[5])), root);
         std::cout << "PASS: independent GPU palettes, shared resources, hierarchy, reload rollback, socket detach, persistence, resize, release\n";
         return 0;

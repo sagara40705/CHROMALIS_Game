@@ -66,6 +66,7 @@ void Persistence(const std::filesystem::path& root) {
     scene.Entity(effect).asset = "effect";
     scene.Entity(effect).effect.follow = model;
     scene.Entity(effect).effect.joint = "Hand";
+    scene.Entity(effect).effect.followTransform = true;
     scene.Entity(model).animation.time = 0.25f;
     MaterialSurface surface;
     surface.shading = ShadingModel::Toon; surface.cutoff = 2; surface.alphaMask = true;
@@ -90,6 +91,11 @@ void Persistence(const std::filesystem::path& root) {
     Require(loaded.materials[0].surface == surface && loaded.Entity(model).materials[0].material == "shared/toon" &&
         loaded.view.lighting.color == scene.view.lighting.color, "Material/light roundtrip failed");
     Require(loaded.Entity(effect).effect.follow == model && loaded.Entity(model).animation.time == 0.25f, "Roundtrip state");
+    Require(loaded.Entity(effect).effect.followTransform, "Socket transform mode was not saved");
+    auto legacy = bytes;
+    legacy.replace(legacy.find("\"version\": 8"), 12, "\"version\": 7");
+    { std::ofstream file(root / "legacy.cscene"); file << legacy; }
+    Require(!LoadScene(root / "legacy.cscene").Entity(effect).effect.followTransform, "Legacy socket mode changed");
     SaveScene(loaded, root / "nested/copy.cscene");
     Require(LoadScene(root / "nested/copy.cscene").Asset("model").path == scene.Asset("model").path, "Save As rebasing");
     auto bad = scene; bad.Entity(model).parent = effect;
@@ -126,7 +132,7 @@ void Persistence(const std::filesystem::path& root) {
     std::filesystem::remove(alias);
     Reject([&] { SaveScene(scene, root / "texture.png"); });
     auto malformed = bytes;
-    const auto version = malformed.find("\"version\": 7");
+    const auto version = malformed.find("\"version\": 8");
     Require(version != std::string::npos, "Missing schema version");
     malformed.replace(version, 12, "\"version\": 9");
     { std::ofstream file(root / "bad.cscene"); file << malformed; }

@@ -46,7 +46,7 @@ bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 Json Encode(const SceneDocument& document, const std::filesystem::path& destination) {
-    Json root{{"version", 7}, {"nextId", std::to_string(document.nextId)}};
+    Json root{{"version", 8}, {"nextId", std::to_string(document.nextId)}};
     const auto& view = document.view;
     const auto& p = document.play;
     root["play"] = {{"player", std::to_string(p.player)}, {"cameraTarget", std::to_string(p.cameraTarget)},
@@ -84,7 +84,7 @@ Json Encode(const SceneDocument& document, const std::filesystem::path& destinat
             {"name", entity.name}, {"asset", entity.asset},
             {"transform", {{"position", entity.local.position}, {"rotation", entity.local.rotation}, {"scale", entity.local.scale}}},
             {"animation", {{"library", a.library}, {"clip", a.clip}, {"time", a.time}, {"speed", a.speed}, {"loop", a.loop}, {"autoplay", a.autoplay}, {"restPose", a.restPose}, {"bindPose", a.bindPose}}},
-            {"effect", {{"count", e.count}, {"autoplay", e.autoplay}, {"follow", std::to_string(e.follow)}, {"joint", e.joint}}}});
+            {"effect", {{"count", e.count}, {"autoplay", e.autoplay}, {"follow", std::to_string(e.follow)}, {"joint", e.joint}, {"followTransform", e.followTransform}}}});
         auto& behaviours = root["entities"].back()["behaviours"] = Json::array();
         for (const auto& b : entity.behaviours) {
             const auto settings = Json::parse(b.settings);
@@ -105,7 +105,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open scene");
         const auto root = Json::parse(stream);
-        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4 && root.at("version") != 5 && root.at("version") != 6 && root.at("version") != 7) throw std::runtime_error("Unsupported scene version");
+        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4 && root.at("version") != 5 && root.at("version") != 6 && root.at("version") != 7 && root.at("version") != 8) throw std::runtime_error("Unsupported scene version");
         SceneDocument document;
         document.legacyBehaviours = root.at("version") < 7;
         document.nextId = Id(root.at("nextId"));
@@ -182,6 +182,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
                 a.at("loop").get<bool>(), a.at("autoplay").get<bool>(), a.at("restPose").get<bool>(), a.at("bindPose").get<bool>(), a.value("library", std::string{})};
             const auto& e = value.at("effect");
             entity.effect = {e.at("count").get<int>(), e.at("autoplay").get<bool>(), Id(e.at("follow")), e.at("joint").get<std::string>()};
+            if (root.at("version") >= 8) entity.effect.followTransform = e.at("followTransform").get<bool>();
             if (root.at("version") >= 3) {
                 const auto& bindings = value.at("materials");
                 if (!bindings.is_array() || bindings.size() > 4096) throw std::runtime_error("Invalid material bindings");

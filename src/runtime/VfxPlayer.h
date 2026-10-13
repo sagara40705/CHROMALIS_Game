@@ -11,15 +11,23 @@ namespace chromalis {
 class VfxPlayer final {
 public:
     VfxPlayer(ID3D12Device* device,ID3D12CommandQueue* queue,DXGI_FORMAT format);
+    // アセット単位の描画・粒子領域を共有し、再生ハンドルは独立させる。
+    explicit VfxPlayer(VfxPlayer& resource);
     ~VfxPlayer();
     bool Reload(const std::filesystem::path& path);
     void Play(int count);
     void Stop();
     void UpdateMatrix(float seconds, const DirectX::XMFLOAT4X4& world);
+    void SetWorld(const DirectX::XMFLOAT4X4& world);
+    // 共有元だけをSceneから毎フレーム一度更新・描画する。
+    void Update(float seconds);
     void Draw(UINT frame,ID3D12GraphicsCommandList* commands,const DirectX::XMFLOAT4X4& view,const DirectX::XMFLOAT4X4& projection);
     const std::string& Status() const;
     int Instances() const;
     int Particles() const;
+    int SharedParticles() const;
+    int AvailableParticles() const;
+    int DrawCalls() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
