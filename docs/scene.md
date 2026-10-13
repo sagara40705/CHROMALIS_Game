@@ -15,6 +15,8 @@ SceneDocument/SceneIOはD3D12とImGuiに依存しない。SceneRuntimeがCPUデ�
 
 ## Transformと更新順序
 
+Simulationは`SetRuntimeTransform`で保存用Localと別の実行用Localを更新できる。Document/DirtyやGPU世代は変えず、次のUpdateで親子Worldへ反映する。同じ保存用LocalのApply/reloadでは実行値を保持し、Local編集またはOpenでは保存値に戻る。[平面移動デモ](player-demo.md)が最初の利用箇所。
+
 左手系、1単位=1m、秒、行ベクトル・row-major。Localは位置・単位Quaternion・正のXYZ Scale。Local行列はS*R*T、WorldはLocal*ParentWorld。非一様Scaleと回転の合成をTRSへ分解し直さず行列で保持し、描画法線にはWorldの逆転置を使う。負/ゼロScaleは現段階では拒否する。小さな可逆Scaleは許容する。
 
 1. フレーム境界でEditor操作、同期reloadを適用する。

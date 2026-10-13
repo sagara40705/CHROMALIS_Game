@@ -29,5 +29,12 @@ public:
     virtual void ConfigureView(RenderSettings&) {}
     virtual void Draw(ID3D12GraphicsCommandList* commands) = 0;
 };
-int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay);
+// ゲーム固有の入力・Simulationを姿勢評価の前へ接続する。Editorとは併用しない。
+class GameLoop {
+public:
+    virtual ~GameLoop() = default;
+    virtual void Initialize(SceneRuntime& scene) = 0;
+    virtual void Update(SceneRuntime& scene, const InputState& input, float seconds, RenderSettings& settings) = 0;
+};
+int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay, GameLoop* game = nullptr);
 }

@@ -57,6 +57,7 @@ struct SceneRuntime::State {
     std::unordered_map<std::string, std::shared_ptr<LoadedAsset>> assets;
     std::vector<std::shared_ptr<Instance>> instances;
     std::vector<DirectX::XMFLOAT4X4> worlds;
+    std::vector<Transform> locals;
     std::vector<size_t> parents, follows, joints;
     std::vector<DrawItem> draws;
     std::vector<std::vector<MaterialSurface>> materials;
@@ -110,6 +111,10 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
             candidate->assets.emplace(source.id, std::move(asset));
         }
         for (const auto& entity : candidate->document.entities) {
+            const auto previousIndex = state_->indices.find(entity.id);
+            const bool preserveLocal = reload != "*" && previousIndex != state_->indices.end() &&
+                state_->document.entities[previousIndex->second].local == entity.local;
+            candidate->locals.push_back(preserveLocal ? state_->locals[previousIndex->second] : entity.local);
             // 材質は候補Sceneの値として解決し、共有中のPlayerや旧Sceneへ書き込まない。
             std::vector<MaterialSurface> surfaces;
             if (!entity.materials.empty()) {
@@ -296,6 +301,10 @@ void SceneRuntime::Clear() {
 void SceneRuntime::Update(float seconds) {
     UpdateState(*state_, seconds);
 }
+void SceneRuntime::SetRuntimeTransform(EntityId entity, const Transform& transform) {
+    ValidateTransform(transform);
+    state_->locals.at(state_->indices.at(entity)) = transform;
+}
 void SceneRuntime::UpdateState(State& state, float seconds, bool advance) {
     using namespace DirectX;
     if (advance) for (const auto& instance : state.instances) if (instance->animation) instance->animation->Update(seconds);
@@ -303,7 +312,7 @@ void SceneRuntime::UpdateState(State& state, float seconds, bool advance) {
     for (size_t i : state.order) {
         auto& instance = *state.instances[i];
         const auto& entity = state.document.entities[i];
-        const auto local = LocalMatrix(entity.local);
+        const auto local = LocalMatrix(state.locals[i]);
         auto world = XMLoadFloat4x4(&local);
         if (state.parents[i] != SIZE_MAX) world *= XMLoadFloat4x4(&state.worlds[state.parents[i]]);
         XMStoreFloat4x4(&state.worlds[i], world);

@@ -119,6 +119,13 @@ std::vector<XMFLOAT4X4> EvaluateWorlds(const SceneDocument& document, const std:
     }
     return result;
 }
+void ValidateTransform(const Transform& transform) {
+    Finite(transform.position); Finite(transform.rotation); Finite(transform.scale);
+    float norm = 0;
+    for (float value : transform.rotation) norm += value * value;
+    Require(std::abs(norm - 1) < 0.001f, "Scene rotation must be a unit quaternion");
+    for (float value : transform.scale) Require(value > 0, "Scene scale must be positive");
+}
 void ValidateScene(const SceneDocument& document) {
     ValidateLighting(document.view.lighting);
     Require(document.materials.size() <= 4096, "Scene exceeds 4096 material definitions");
@@ -150,11 +157,7 @@ void ValidateScene(const SceneDocument& document) {
         }
         Require(entity.id < document.nextId, "nextId must exceed every entity ID");
         Require(!entity.name.empty() && entity.name.size() <= 256, "Invalid entity name");
-        Finite(entity.local.position); Finite(entity.local.rotation); Finite(entity.local.scale);
-        float norm = 0;
-        for (float value : entity.local.rotation) norm += value * value;
-        Require(std::abs(norm - 1) < 0.001f, "Scene rotation must be a unit quaternion");
-        for (float value : entity.local.scale) Require(value > 0, "Scene scale must be positive");
+        ValidateTransform(entity.local);
         if (entity.asset.empty()) {
             Require(entity.animation.library.empty(), "Empty object cannot reference animations");
             Require(!entity.effect.follow, "Empty object cannot follow a socket");

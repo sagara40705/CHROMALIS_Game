@@ -1,7 +1,10 @@
 # CHROMALIS Game — Phase 0C
 
 Windows x64 / C++20 / DirectX 12 のゲーム本体とRuntimeです。静的モデルに加え、glTF/GLB骨格モデルの変換・ozz CPU姿勢評価・GPU Skinning・Effekseer DX12の代表VFXを接続しています。0Aの三角形・入力・診断も維持します。
+アセット制作時は[制作・納品フォーマット](docs/asset-authoring.md)を参照してください。
 このリポジトリだけでビルドでき、EditorやDear ImGuiの取得・ビルドは不要です。
+
+平面上のプレイヤー移動・待機/歩行/走行・追従カメラのデモは[player-demo.md](docs/player-demo.md)を参照。
 
 骨格/VFXの制作・実行手順、採用版、対応範囲、色・寿命の契約は[docs/animation-vfx.md](docs/animation-vfx.md)。
 

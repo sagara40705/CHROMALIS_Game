@@ -33,6 +33,8 @@ public:
     void Clear();
 
     void Update(float seconds);
+    // 保存用Documentを変更せず、次のUpdateで使う実行中のLocalを設定する。
+    void SetRuntimeTransform(EntityId entity, const Transform& transform);
     std::span<const DrawItem> DrawItems() const;
     void DrawEffects(ID3D12GraphicsCommandList* commands);
     AnimationPlayer* Animation(EntityId entity);

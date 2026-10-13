@@ -15,6 +15,7 @@ struct Transform {
     std::array<float, 3> position{0, 0, 0};
     std::array<float, 4> rotation{0, 0, 0, 1};
     std::array<float, 3> scale{1, 1, 1};
+    bool operator==(const Transform&) const = default;
 };
 struct SceneAsset {
     std::string id;
@@ -68,6 +69,7 @@ struct SceneDocument {
 };
 
 DirectX::XMFLOAT4X4 LocalMatrix(const Transform& transform);
+void ValidateTransform(const Transform& transform);
 void ValidateScene(const SceneDocument& document);
 std::vector<size_t> SceneOrder(const SceneDocument& document);
 std::vector<DirectX::XMFLOAT4X4> EvaluateWorlds(const SceneDocument& document, const std::vector<size_t>& order);
