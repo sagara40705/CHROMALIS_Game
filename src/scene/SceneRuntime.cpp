@@ -191,26 +191,10 @@ bool SceneRuntime::ReloadAsset(const std::string& id) {
 }
 bool SceneRuntime::AssignAsset(EntityId entity, const std::filesystem::path& path, SceneAssetKind kind) {
     try {
-        auto document = Document();
         auto id = std::string("effect/") + std::to_string(entity);
         if (kind == SceneAssetKind::Static) id = LoadStaticAsset(path).id;
         if (kind == SceneAssetKind::Skeletal) id = LoadSkeletalAsset(path).mesh.id;
-        auto found = std::find_if(document.assets.begin(), document.assets.end(), [&](const auto& asset) { return asset.id == id; });
-        SceneAsset source{id, kind, std::filesystem::absolute(path).lexically_normal()};
-        if (found == document.assets.end()) document.assets.push_back(source);
-        else {
-            if (found->kind != kind) throw std::runtime_error("Asset ID already belongs to a different asset kind");
-            *found = source;
-        }
-        auto& target = document.Entity(entity);
-        if (target.asset != id) { target.animation = {}; target.effect = {}; }
-        target.asset = id;
-        std::erase_if(document.assets, [&](const auto& asset) {
-            return std::none_of(document.entities.begin(), document.entities.end(), [&](const auto& value) { return value.asset == asset.id; });
-        });
-        if (!Replace(std::move(document), id)) return false;
-        dirty_ = true;
-        return true;
+        return AssignAsset(entity, {id, kind, std::filesystem::absolute(path).lexically_normal()});
     } catch (const GpuFailure&) {
         throw;
     } catch (const std::exception& error) {
@@ -219,6 +203,35 @@ bool SceneRuntime::AssignAsset(EntityId entity, const std::filesystem::path& pat
         if (FAILED(renderer_.Device()->GetDeviceRemovedReason())) throw;
         return false;
     }
+}
+bool SceneRuntime::ReloadAsset(const std::string& id, const std::filesystem::path& path) {
+    auto document = Document();
+    const auto found = std::find_if(document.assets.begin(), document.assets.end(), [&](const auto& asset) { return asset.id == id; });
+    if (found == document.assets.end()) { status_ = "Asset is not used by this Scene: " + id; return false; }
+    const auto absolute = std::filesystem::absolute(path).lexically_normal();
+    const bool moved = found->path != absolute;
+    found->path = absolute;
+    if (!Replace(std::move(document), id)) return false;
+    dirty_ |= moved;
+    return true;
+}
+bool SceneRuntime::AssignAsset(EntityId entity, const SceneAsset& asset) {
+    auto document = Document();
+    auto& target = document.Entity(entity);
+    if (target.asset != asset.id) { target.animation = {}; target.effect = {}; }
+    target.asset = asset.id;
+    auto found = std::find_if(document.assets.begin(), document.assets.end(), [&](const auto& value) { return value.id == asset.id; });
+    if (found == document.assets.end()) document.assets.push_back(asset);
+    else {
+        if (found->kind != asset.kind) { status_ = "Asset ID belongs to another kind"; return false; }
+        *found = asset;
+    }
+    std::erase_if(document.assets, [&](const auto& value) {
+        return std::none_of(document.entities.begin(), document.entities.end(), [&](const auto& object) { return object.asset == value.id; });
+    });
+    if (!Replace(std::move(document), asset.id)) return false;
+    dirty_ = true;
+    return true;
 }
 bool SceneRuntime::Delete(EntityId entity) {
     auto document = Document();

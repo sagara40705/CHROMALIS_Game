@@ -1,4 +1,5 @@
 #include "cooker/CookStatic.h"
+#include "assets/CookRecipe.h"
 #include <windows.h>
 #include <wincodec.h>
 #include <bcrypt.h>
@@ -134,7 +135,7 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
     const auto bytes = ReadAssetBytes(absolute);
     const auto name = absolute.filename().u8string();
     imp.asset.dependencies.push_back({std::string(reinterpret_cast<const char*>(name.data()), name.size()), Hash(bytes)});
-    const std::string recipe = skeletal ? "CHRS1/cgltf1.15/LH/LINEAR/recipe1" : "CHRMESH1/cgltf1.15/WIC-RGBA8/static-LH/no-mips/recipe2";
+    const auto recipe = skeletal ? SkeletalCookRecipe : StaticCookRecipe;
     imp.asset.dependencies.push_back({"@recipe", Hash({reinterpret_cast<const uint8_t*>(recipe.data()), recipe.size()})});
     cgltf_options options{}; cgltf_data* raw = nullptr;
     const auto parsed = cgltf_parse(&options, bytes.data(), bytes.size(), &raw);

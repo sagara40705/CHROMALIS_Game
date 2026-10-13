@@ -55,6 +55,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File assets/Scenes/Prepare.ps1 -C
 
 EditorはScene pathのNew/Open/Save/Save As/Reload、Hierarchyの追加・親変更・子孫削除、InspectorのTransform/Asset、Animation/VFXの初期設定とプレビュー操作を提供する。手入力のアセットパスは作業ディレクトリ基準、保存後はScene相対へ変換する。Cookerは選択オブジェクトへ割り当てる。未保存の配置変更を破棄する操作には確認を出す。
 
+制作アセットのカタログはEditor側が所有する。Gameはカタログを読み込まない。同じAsset IDの出力先変更は候補検証後にScene全参照へ反映し、Sceneを未保存状態にする。カタログからのVFX割り当ても指定された安定IDを維持する。変換失敗とScene反映失敗は別段階で扱い、後者では旧描画を保持する。
+
 ## 制限
 
 Undo/Redo、Prefab、Gizmo、ビューポート分離、非同期Streaming、汎用ECS、Play用Scene複製は未実装。Scene APIはメインスレッドのフレーム境界で使い、DrawItemの参照を次の編集/更新まで保持しない。Socketは位置追従だけ。VFX同時数の間隔は従来の検証用World Xオフセットを維持する。日本語コメントを使用するがImGuiの日本語フォントは未導入。Scene JSONの日本語名・パスは保持できるがUI上の日本語名表示は未対応。

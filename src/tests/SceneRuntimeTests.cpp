@@ -141,6 +141,22 @@ void Transactions(Renderer& renderer, SceneRuntime& scene, const SceneDocument& 
     Require(scene.Delete(5), "Delete socket target failed");
     Require(!scene.Document().Entity(7).effect.follow && scene.World(7)._41 == position._41, "Delete did not detach at current position");
     Require(scene.Open(root / "Example.cscene"), "Scene restore failed");
+    const auto moved = root / "relocated.cmesh";
+    std::filesystem::copy_file(cube, moved, std::filesystem::copy_options::overwrite_existing);
+    const auto sharedGeneration = scene.Generation(2);
+    Require(!scene.ReloadAsset(example.assets[0].id, root / "missing.cmesh") && scene.Generation(2) == sharedGeneration, "Failed relocation lost live mesh");
+    Require(scene.ReloadAsset(example.assets[0].id, moved) && scene.Dirty() && scene.Generation(2) != sharedGeneration,
+        "Asset relocation failed");
+    Require(scene.Document().Asset(example.assets[0].id).path == moved && scene.Generation(2) == scene.Generation(3), "Shared relocation mismatch");
+    Require(!scene.AssignAsset(2, {"incorrect/id", SceneAssetKind::Static, cube}), "Mismatched catalog ID accepted");
+    Require(scene.Document().Entity(2).asset == example.assets[0].id, "Failed assignment changed reference");
+    auto expanded = scene.Document();
+    const auto extraEffect = expanded.Add("Catalog effect");
+    Require(scene.Apply(expanded), "Add effect target failed");
+    Require(scene.AssignAsset(extraEffect, {"catalog/effect", SceneAssetKind::Effect, example.assets[2].path}), "Stable VFX ID assignment failed");
+    Require(scene.Document().Entity(extraEffect).asset == "catalog/effect", "VFX catalog ID replaced with entity ID");
+    Frame(renderer, scene);
+    Require(scene.Open(root / "Example.cscene"), "Restore after catalog operations failed");
     Require(scene.Animation(5)->playback.time == example.Entity(5).animation.time && !scene.Dirty(), "Saved initial state was not restored");
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < 60; ++i) {
