@@ -1,5 +1,7 @@
 # Phase 0B static asset contract
 
+Scene導入後の所有権・複数モデル配置・描画リストは[scene.md](scene.md)を正とする。以下の2スロット記述は0B時点のプレビューで、現在は旧CLI互換設定だけに残る。静的ファイル形式は変更していない。
+
 ## Responsibilities
 
 `ChromalisAssetCooker` uses **cgltf 1.15 (MIT)** to parse/validate glTF 2.0 and GLB, and **Windows Imaging Component** from the selected Windows SDK to decode PNG/JPEG. It links to the CPU-only `ChromalisAssets` library. Runtime links only to `ChromalisAssets`; it neither parses glTF nor requires cgltf/WIC/Editor/ImGui. Cooker can be excluded with `-DCHROMALIS_BUILD_COOKER=OFF` (no cgltf fetch).

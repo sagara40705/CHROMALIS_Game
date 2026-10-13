@@ -5,6 +5,8 @@ Windows x64 / C++20 / DirectX 12 のゲーム本体とRuntimeです。静的モ�
 
 骨格/VFXの制作・実行手順、採用版、対応範囲、色・寿命の契約は[docs/animation-vfx.md](docs/animation-vfx.md)。
 
+配置・親子Transform・保存/読み込み・複数個体の所有権は[docs/scene.md](docs/scene.md)。`--scene assets/Scenes/Example.cscene`で共通Sceneを読み込めます（初回は記載の準備スクリプトを実行）。
+
 ## 必要環境
 
 - Visual Studio 2026「C++によるデスクトップ開発」、v145 toolset。

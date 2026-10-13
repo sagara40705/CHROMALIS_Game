@@ -44,6 +44,7 @@ target_link_libraries(ChromalisRuntime PUBLIC ChromalisAssets)
 include(cmake/Animation.cmake)
 include(cmake/Vfx.cmake)
 include(cmake/RuntimeLicenses.cmake)
+include(cmake/Scene.cmake)
 set(CHROMALIS_RUNTIME_LICENSE_DIR "${CHROMALIS_RUNTIME_LICENSE_DIR}" CACHE INTERNAL "Generated runtime notices")
 target_sources(ChromalisRuntime PRIVATE src/runtime/VfxPlayer.cpp)
 target_link_libraries(ChromalisRuntime PRIVATE EffekseerRendererDX12)
@@ -53,6 +54,8 @@ target_compile_options(ChromalisAnimation PRIVATE /W4 /WX /permissive- /utf-8 /E
 target_compile_definitions(ChromalisAnimation PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(ChromalisAnimation PUBLIC ChromalisAssets PRIVATE ozz_animation_offline)
 target_link_libraries(ChromalisRuntime PUBLIC ChromalisAnimation)
+target_link_libraries(ChromalisRuntime PUBLIC ChromalisScene)
+target_sources(ChromalisRuntime PRIVATE src/scene/SceneRuntime.cpp)
 add_custom_command(OUTPUT "${SHADER_DIR}/Skin_vs.h"
   COMMAND "${DXC_EXECUTABLE}" -T vs_6_0 -E vs_main -D SKINNED -WX -Ges -Zpr
     -Fh "${SHADER_DIR}/Skin_vs.h" -Vn Skin_vs "${CMAKE_CURRENT_SOURCE_DIR}/shaders/Mesh.hlsl"
@@ -97,7 +100,18 @@ set_target_properties(ChromalisGame PROPERTIES
   VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:ChromalisGame>")
 
 if(BUILD_TESTING)
+  add_executable(ChromalisSceneTests src/tests/SceneTests.cpp)
+  target_link_libraries(ChromalisSceneTests PRIVATE ChromalisScene)
+  target_compile_options(ChromalisSceneTests PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
+  add_test(NAME scene.cpu COMMAND ChromalisSceneTests "${CMAKE_CURRENT_BINARY_DIR}/scene-tests/cpu")
   if(CHROMALIS_BUILD_COOKER)
+    add_executable(ChromalisSceneRuntimeTests src/tests/SceneRuntimeTests.cpp)
+    target_link_libraries(ChromalisSceneRuntimeTests PRIVATE ChromalisRuntime)
+    target_compile_options(ChromalisSceneRuntimeTests PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
+    add_test(NAME scene.warp COMMAND ChromalisSceneRuntimeTests "${CMAKE_CURRENT_BINARY_DIR}/scene-tests/warp"
+      "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/cube.cmesh" "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/figure.cskin"
+      "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/skinning.cskin" "${CMAKE_CURRENT_SOURCE_DIR}/assets/Vfx/Pulse.efkefc" warp)
+    set_tests_properties(scene.warp PROPERTIES FIXTURES_REQUIRED "animated-assets;cooked-assets" TIMEOUT 120 RUN_SERIAL TRUE)
     add_executable(ChromalisAnimationTests src/tests/AnimationTests.cpp)
     target_link_libraries(ChromalisAnimationTests PRIVATE ChromalisCook ChromalisAnimation)
     target_compile_options(ChromalisAnimationTests PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)

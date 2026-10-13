@@ -75,11 +75,20 @@ void VfxPlayer::Play(int count) {
     Stop();for(int i=0;i<count;++i){auto h=p.manager->Play(p.effect,0,0,0);Need(h>=0,"VFX instance budget exhausted");p.handles.push_back(h);}
 }
 void VfxPlayer::Stop(){auto& p=*impl_;p.manager->StopAllEffects();p.manager->Update(0);p.handles.clear();}
-void VfxPlayer::Update(float seconds,const VfxSettings& settings) {
-    auto& p=*impl_;Need(std::isfinite(seconds)&&seconds>=0 && std::isfinite(settings.scale)&&settings.scale>0,"Invalid VFX time/scale");
-    for(float v:settings.position)Need(std::isfinite(v),"Invalid VFX position");for(float v:settings.rotation)Need(std::isfinite(v),"Invalid VFX rotation");
-    for(size_t i=0;i<p.handles.size();++i){auto h=p.handles[i];p.manager->SetLocation(h,settings.position[0]+static_cast<float>(i)*0.35f,settings.position[1],settings.position[2]);p.manager->SetRotation(h,settings.rotation[0],settings.rotation[1],settings.rotation[2]);p.manager->SetScale(h,settings.scale,settings.scale,settings.scale);}
-    p.time+=seconds;p.manager->Update(seconds*60);std::erase_if(p.handles,[&](auto h){return !p.manager->Exists(h);});
+void VfxPlayer::UpdateMatrix(float seconds, const DirectX::XMFLOAT4X4& world) {
+    auto& player = *impl_;
+    Need(std::isfinite(seconds) && seconds >= 0, "Invalid VFX delta");
+    for (size_t i = 0; i < player.handles.size(); ++i) {
+        Effekseer::Matrix43 matrix;
+        for (size_t row = 0; row < 4; ++row)
+            for (size_t column = 0; column < 3; ++column) matrix.Value[row][column] = world.m[row][column];
+        // 個数プレビューの間隔は既存と同じWorld X方向。親の姿勢は行列で渡す。
+        matrix.Value[3][0] += static_cast<float>(i) * 0.35f;
+        player.manager->SetMatrix(player.handles[i], matrix);
+    }
+    player.time += seconds;
+    player.manager->Update(seconds * 60);
+    std::erase_if(player.handles, [&](auto handle) { return !player.manager->Exists(handle); });
 }
 void VfxPlayer::Draw(UINT frame,ID3D12GraphicsCommandList* commands,const DirectX::XMFLOAT4X4& view,const DirectX::XMFLOAT4X4& projection) {
     auto& p=*impl_;if(p.handles.empty())return;

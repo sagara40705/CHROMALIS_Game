@@ -1,6 +1,7 @@
 cbuffer DrawConstants : register(b0) {
     row_major float4x4 worldViewProjection;
     row_major float4x4 world;
+    row_major float4x4 normalWorld;
     float4 baseColor;
     float4 options; // cutoff, alphaMask, unlit, unused
 };
@@ -28,7 +29,7 @@ VSOutput vs_main(VSInput v) {
     v.position=p; v.normal=n;
 #endif
     VSOutput o; o.position = mul(float4(v.position,1), worldViewProjection);
-    o.normal = mul(float4(v.normal,0), world).xyz; o.uv = v.uv; return o;
+    o.normal = mul(float4(v.normal,0), normalWorld).xyz; o.uv = v.uv; return o;
 }
 float4 ps_main(VSOutput v, bool front : SV_IsFrontFace) : SV_Target {
     float4 color = baseTexture.Sample(baseSampler,v.uv)*baseColor;

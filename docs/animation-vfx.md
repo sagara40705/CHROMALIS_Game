@@ -1,5 +1,7 @@
 # Phase 0C: Animation / VFXの接続契約
 
+Scene導入後の配置・再生状態の所有・Editor操作は[scene.md](scene.md)を正とする。以下の固定プレビュー枠は旧CLI互換設定へ移し、Rendererは描画リストを受け取る。cskin形式とライブラリ採用版は変更していない。
+
 静的`.cmesh`を維持し、骨格モデル`.cskin`とEffekseer `.efkefc`を追加する。これは制作経路を確認するプレビュー実装であり、2つの静的スロットと1つの骨格スロットをWorldの恒久仕様にはしない。
 
 ## 採用判断

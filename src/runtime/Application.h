@@ -1,5 +1,6 @@
 #pragma once
 #include "runtime/Renderer.h"
+#include "scene/SceneRuntime.h"
 #include <array>
 #include <memory>
 
@@ -18,11 +19,12 @@ struct FrameStats {
 class Overlay {
 public:
     virtual ~Overlay() = default;
-    virtual void Initialize(HWND window, Renderer& renderer, Log& log) = 0;
+    virtual void Initialize(HWND window, Renderer& renderer, SceneRuntime& scene, Log& log) = 0;
     virtual void Shutdown() noexcept = 0;
     virtual bool HandleMessage(HWND window, UINT message, WPARAM w, LPARAM l) = 0;
     virtual void Build(const FrameStats& stats, const InputState& input, RenderSettings& settings) = 0;
     virtual bool CapturesKeyboard() const = 0;
+    virtual bool CanClose() { return true; }
     virtual void Draw(ID3D12GraphicsCommandList* commands) = 0;
 };
 int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay);

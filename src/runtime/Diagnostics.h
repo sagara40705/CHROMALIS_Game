@@ -4,8 +4,14 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 
 namespace chromalis {
+// GPUの完了を保証できない失敗は、アセット更新失敗として握りつぶさない。
+class GpuFailure : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 class Log final {
 public:
     explicit Log(const std::filesystem::path& path);

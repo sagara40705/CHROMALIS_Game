@@ -1,8 +1,7 @@
 #pragma once
 #include "runtime/Diagnostics.h"
 #include "assets/StaticAsset.h"
-#include "animation/AnimationPlayer.h"
-#include "runtime/VfxPlayer.h"
+#include "assets/SkeletalAsset.h"
 #include <DirectXMath.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -14,19 +13,22 @@
 
 namespace chromalis {
 using Microsoft::WRL::ComPtr;
-struct ModelPose {
-    std::array<float, 3> position{0,0,0};
-    float yaw = 0, scale = 1;
+struct MeshHandle {
+    uint32_t slot = UINT32_MAX, generation = 0;
+    bool operator==(const MeshHandle&) const = default;
+};
+struct DrawItem {
+    MeshHandle mesh;
+    DirectX::XMFLOAT4X4 world;
+    std::span<const DirectX::XMFLOAT4X4> bones, normals;
 };
 struct RenderSettings {
     std::array<float, 4> clear{0.055f, 0.07f, 0.11f, 1.0f};
     float x = 0, y = 0, scale = 1;
     bool vsync = true;
     bool showModels = true, unlit = false;
+    bool diagnosticTriangle = false;
     float cameraYaw = 0.35f, cameraPitch = 0.25f, cameraDistance = 7;
-    std::array<ModelPose, 2> models{ModelPose{{-1.25f,0,0},0,0.7f}, ModelPose{{1.25f,0,0.6f},0.5f,0.7f}};
-    ModelPose animated{{0,-1,0},0,1};
-    VfxSettings vfx;
 };
 struct RendererOptions { bool warp = false, debug = false, gpuValidation = false; };
 enum class AssetCaptureCheck { None, Corners, UpdatedCorners, Midtone, VfxAlpha };
@@ -42,21 +44,18 @@ public:
     Renderer& operator=(const Renderer&) = delete;
     void Initialize(HWND window, UINT width, UINT height, const RendererOptions& options);
     void Resize(UINT width, UINT height);
-    ID3D12GraphicsCommandList* BeginFrame(const RenderSettings& settings);
+    ID3D12GraphicsCommandList* BeginFrame(const RenderSettings& settings, std::span<const DrawItem> items, bool triangle = false);
+    void BeginOverlay();
     bool EndFrame(bool vsync, bool capture);
     bool TestVisible();
     void SaveCapture(const std::filesystem::path& path, bool verifyTriangle, AssetCaptureCheck assetCheck = AssetCaptureCheck::None);
     void WaitIdle();
-    void ReleasePreviewAssets();
     void DrainDiagnostics();
-    bool ReloadModel(size_t slot, const std::filesystem::path& path);
-    bool ReloadAnimation(const std::filesystem::path& path);
-    AnimationPlayer* Animation() { return animation_.get(); }
-    bool ReloadVfx(const std::filesystem::path& path);
-    VfxPlayer* Vfx() { return vfx_.get(); }
-    void UpdatePresentation(float seconds,const RenderSettings& settings);
-    const std::string& AssetStatus() const { return assetStatus_; }
-    uint64_t ModelGeneration(size_t slot) const { return modelGenerations_.at(slot); }
+    MeshHandle CreateMesh(const StaticAsset& asset, const std::vector<SkinVertex>* skin = nullptr);
+    void ReleaseMesh(MeshHandle mesh);
+    UINT CurrentFrame() const { return frameIndex_; }
+    const DirectX::XMFLOAT4X4& View() const { return view_; }
+    const DirectX::XMFLOAT4X4& Projection() const { return projection_; }
     ID3D12Device* Device() const { return device_.Get(); }
     ID3D12CommandQueue* Queue() const { return queue_.Get(); }
     UINT64 CompletedFence() const;
@@ -74,6 +73,7 @@ private:
         std::byte* mapped = nullptr;
         ComPtr<ID3D12Resource> bones;
         std::byte* bonesMapped = nullptr;
+        UINT64 boneCapacity = 256 * 128;
         ComPtr<ID3D12Resource> timestamps;
         UINT64 fence = 0;
     };
@@ -81,7 +81,8 @@ private:
     void CreatePipeline();
     void CreateMeshPipeline();
     void CreateDepth();
-    void DrawModels(const RenderSettings& settings);
+    void DrawModels(const RenderSettings& settings, std::span<const DrawItem> items);
+    void PrepareBoneUpload(std::span<const DrawItem> items);
     void WaitFor(UINT64 value);
     void Transition(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after);
     void PrepareCapture();
@@ -124,13 +125,10 @@ private:
         std::vector<MeshPart> parts;
         std::vector<MeshMaterial> materials;
     };
-    std::array<std::unique_ptr<GpuModel>, 2> models_;
-    std::unique_ptr<GpuModel> animatedModel_;
-    std::unique_ptr<AnimationPlayer> animation_;
-    std::unique_ptr<VfxPlayer> vfx_;
-    std::unique_ptr<GpuModel> UploadModel(const StaticAsset& asset, const std::vector<SkinVertex>* skin, bool& submitted);
-    std::array<uint64_t, 2> modelGenerations_{};
-    std::string assetStatus_ = "No cooked models loaded";
+    struct MeshEntry { std::unique_ptr<GpuModel> model; uint32_t generation = 1; };
+    std::vector<MeshEntry> meshes_;
+    DirectX::XMFLOAT4X4 view_{}, projection_{};
+    std::unique_ptr<GpuModel> UploadModel(const StaticAsset& asset, const std::vector<SkinVertex>* skin);
     ComPtr<ID3D12Resource> depth_;
     ComPtr<ID3D12DescriptorHeap> dsv_;
     ComPtr<ID3D12RootSignature> meshRoot_;

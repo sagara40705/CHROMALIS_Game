@@ -33,12 +33,6 @@ Renderer::~Renderer() {
     for (auto& frame : frames_) if (frame.bonesMapped) frame.bones->Unmap(0,nullptr);
     if (fenceEvent_) CloseHandle(fenceEvent_);
 }
-void Renderer::ReleasePreviewAssets() {
-    // GPUの使用終了後にプレビューの全リソースを解放し、終了診断へ含める。
-    WaitIdle();vfx_.reset();animation_.reset();animatedModel_.reset();
-    for(auto& model:models_)model.reset();
-    DrainDiagnostics();
-}
 void Renderer::Initialize(HWND window, UINT width, UINT height, const RendererOptions& options) {
     UINT factoryFlags = 0;
     if (options.debug) {
@@ -194,22 +188,22 @@ void Renderer::CheckDevice(HRESULT result, std::string_view operation) {
         log_.Write(std::string(operation) + ": " + HresultText(result));
         log_.Write("Device removed reason: " + HresultText(device_->GetDeviceRemovedReason()));
         DrainDiagnostics();
-        Check(result, operation);
+        throw GpuFailure(std::string(operation) + ": " + HresultText(result));
     }
 }
 UINT64 Renderer::CompletedFence() const {
     const auto value = fence_->GetCompletedValue();
     if (value == std::numeric_limits<UINT64>::max())
-        throw std::runtime_error("GPU device removed while reading fence: " + HresultText(device_->GetDeviceRemovedReason()));
+        throw GpuFailure("GPU device removed while reading fence: " + HresultText(device_->GetDeviceRemovedReason()));
     return value;
 }
 void Renderer::WaitFor(UINT64 value) {
     if (CompletedFence() >= value) return;
     CheckDevice(fence_->SetEventOnCompletion(value, fenceEvent_), "Set fence completion event");
     const auto result = WaitForSingleObject(fenceEvent_, 10000);
-    if (result == WAIT_FAILED) CheckWin32(FALSE, "Wait for GPU fence");
-    if (result != WAIT_OBJECT_0) throw std::runtime_error("GPU fence wait exceeded 10 seconds; no automatic recovery. Device reason: " + HresultText(device_->GetDeviceRemovedReason()));
-    if (CompletedFence() < value) throw std::runtime_error("Fence signaled without reaching requested value");
+    if (result == WAIT_FAILED) throw GpuFailure("Wait for GPU fence: " + HresultText(HRESULT_FROM_WIN32(GetLastError())));
+    if (result != WAIT_OBJECT_0) throw GpuFailure("GPU fence wait exceeded 10 seconds; no automatic recovery. Device reason: " + HresultText(device_->GetDeviceRemovedReason()));
+    if (CompletedFence() < value) throw GpuFailure("Fence signaled without reaching requested value");
 }
 void Renderer::WaitIdle() {
     if (!queue_ || !fence_ || !fenceEvent_) return;
@@ -239,11 +233,12 @@ void Renderer::Transition(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES af
     barrier.Transition.StateBefore = before; barrier.Transition.StateAfter = after;
     list_->ResourceBarrier(1, &barrier);
 }
-ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings) {
+ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, std::span<const DrawItem> items, bool triangle) {
     frameIndex_ = swapChain_->GetCurrentBackBufferIndex();
     auto& frame = frames_[frameIndex_];
     const auto start = std::chrono::steady_clock::now();
     WaitFor(frame.fence);
+    PrepareBoneUpload(items);
     if(frame.fence) {
         UINT64* times=nullptr;D3D12_RANGE range{0,16};Check(frame.timestamps->Map(0,&range,reinterpret_cast<void**>(&times)),"Read completed GPU timestamps");
         gpuFrameMs_=static_cast<double>(times[1]-times[0])*1000.0/static_cast<double>(timestampFrequency_);D3D12_RANGE noWrite{0,0};frame.timestamps->Unmap(0,&noWrite);
@@ -264,29 +259,31 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings) 
     const D3D12_RECT rect{0, 0, static_cast<LONG>(width_), static_cast<LONG>(height_)};
     list_->RSSetViewports(1, &viewport); list_->RSSetScissorRects(1, &rect);
     list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    const bool sceneVisible=settings.showModels && (models_[0] || models_[1] || animatedModel_);
-    if (sceneVisible || vfx_) {
-        auto scene=rtv;scene.ptr+=FrameCount*rtvStride_;
-        auto dsv = dsv_->GetCPUDescriptorHandleForHeapStart();
-        list_->OMSetRenderTargets(1,&scene,FALSE,&dsv);
-        list_->ClearDepthStencilView(dsv,D3D12_CLEAR_FLAG_DEPTH,1,0,0,nullptr);
-        if(sceneVisible)DrawModels(settings);
-        if(vfx_) {
-            using namespace DirectX;
-            const float cp=std::cos(settings.cameraPitch),sp=std::sin(settings.cameraPitch);
-            auto eye=XMVectorSet(std::sin(settings.cameraYaw)*cp*settings.cameraDistance,sp*settings.cameraDistance,-std::cos(settings.cameraYaw)*cp*settings.cameraDistance,1);
-            XMFLOAT4X4 view,projection;XMStoreFloat4x4(&view,XMMatrixLookAtLH(eye,XMVectorZero(),XMVectorSet(0,1,0,0)));
-            XMStoreFloat4x4(&projection,XMMatrixPerspectiveFovLH(XM_PIDIV4,static_cast<float>(width_)/static_cast<float>(height_),0.05f,500));
-            vfx_->Draw(frameIndex_,list_.Get(),view,projection);
-        }
-    } else {
+    using namespace DirectX;
+    const float cp = std::cos(settings.cameraPitch), sp = std::sin(settings.cameraPitch);
+    const auto eye = XMVectorSet(std::sin(settings.cameraYaw) * cp * settings.cameraDistance,
+        sp * settings.cameraDistance, -std::cos(settings.cameraYaw) * cp * settings.cameraDistance, 1);
+    XMStoreFloat4x4(&view_, XMMatrixLookAtLH(eye, XMVectorZero(), XMVectorSet(0, 1, 0, 0)));
+    XMStoreFloat4x4(&projection_, XMMatrixPerspectiveFovLH(XM_PIDIV4, static_cast<float>(width_) / height_, 0.05f, 500));
+    if (triangle) {
         list_->SetGraphicsRootSignature(root_.Get());
         list_->SetGraphicsRootConstantBufferView(0, frame.constants->GetGPUVirtualAddress());
         list_->DrawInstanced(3, 1, 0, 0);
+    } else {
+        auto scene = rtv;
+        scene.ptr += FrameCount * rtvStride_;
+        const auto dsv = dsv_->GetCPUDescriptorHandleForHeapStart();
+        list_->OMSetRenderTargets(1, &scene, FALSE, &dsv);
+        list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
+        if (settings.showModels) DrawModels(settings, items);
     }
-    // ImGuiは表示色を出力するため、最後にUNORMのViewへ戻す。
-    list_->OMSetRenderTargets(1,&rtv,FALSE,nullptr);
     return list_.Get();
+}
+void Renderer::BeginOverlay() {
+    // Editorは表示色を直接出力するため、VFXの後でUNORM Viewへ戻す。
+    auto rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += frameIndex_ * rtvStride_;
+    list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 }
 void Renderer::PrepareCapture() {
     const auto desc = targets_[frameIndex_]->GetDesc();

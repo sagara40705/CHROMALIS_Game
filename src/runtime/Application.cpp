@@ -11,7 +11,22 @@
 namespace chromalis {
 namespace {
 using Clock = std::chrono::steady_clock;
+struct ModelPose {
+    std::array<float, 3> position{0, 0, 0};
+    float yaw = 0, scale = 1;
+};
+struct LegacyPreview {
+    std::array<ModelPose, 2> models{ModelPose{{-1.25f,0,0},0,0.7f}, ModelPose{{1.25f,0,0.6f},0.5f,0.7f}};
+    ModelPose animated{{0,-1,0},0,1};
+    struct {
+        std::array<float, 3> position{0, 0, 0};
+        float scale = 0.3f;
+        int count = 1, joint = 0;
+        bool followSocket = false;
+    } vfx;
+};
 struct Options {
+    std::filesystem::path scene;
     RendererOptions renderer;
     UINT64 frameLimit = 0;
     bool smoke = false;
@@ -50,6 +65,7 @@ Options ParseOptions() {
             else if (arg == L"--smoke-test") result.smoke = true;
             else if (arg == L"--capture") result.capture = value();
             else if (arg == L"--log") result.log = value();
+            else if (arg == L"--scene") result.scene=value();
             else if (arg == L"--asset") result.assets[0] = value();
             else if (arg == L"--asset2") result.assets[1] = value();
             else if (arg == L"--asset-smoke") result.assetSmoke = true;
@@ -73,6 +89,8 @@ Options ParseOptions() {
                 if (!result.frameLimit || result.frameLimit > 1000000) throw std::runtime_error("--frames out of range");
             } else throw std::runtime_error("Unknown argument: " + Utf8(arg));
         }
+        if (!result.scene.empty() && (!result.assets[0].empty() || !result.assets[1].empty() || !result.animation.empty() || !result.vfx.empty() || result.smoke || result.integrationSmoke))
+            throw std::runtime_error("--scene cannot be combined with legacy asset/test setup");
         if (result.smoke) result.frameLimit = 32;
         if(result.vfxCheck){if(result.vfx.empty())throw std::runtime_error("--vfx-check requires AlphaProbe.efkefc");result.frameLimit=4;}
         if(result.animationCheck){if(result.animation.empty())throw std::runtime_error("--animation-check requires skinning.cskin");result.frameLimit=4;}
@@ -102,7 +120,7 @@ Options ParseOptions() {
 class Application final {
 public:
     Application(HINSTANCE instance, const wchar_t* name, Overlay* overlay, Log& log, Options options)
-        : instance_(instance), name_(name), overlay_(overlay), log_(log), options_(std::move(options)), renderer_(log) {}
+        : instance_(instance), name_(name), overlay_(overlay), log_(log), options_(std::move(options)), renderer_(log), scene_(renderer_, log) {}
     ~Application() {
         try { renderer_.WaitIdle(); } catch (const std::exception& e) { log_.Write(e.what()); }
         if (overlay_) overlay_->Shutdown();
@@ -125,29 +143,35 @@ public:
         CheckWin32(GetClientRect(window_, &client), "Get initial client bounds");
         pendingWidth_ = static_cast<UINT>(client.right); pendingHeight_ = static_cast<UINT>(client.bottom);
         renderer_.Initialize(window_, pendingWidth_, pendingHeight_, options_.renderer);
-        if(!options_.animation.empty() && !renderer_.ReloadAnimation(options_.animation))throw std::runtime_error(renderer_.AssetStatus());
-        if(options_.bindPose){renderer_.Animation()->playback.bindPose=true;renderer_.Animation()->playback.playing=false;}
+        if(!options_.animation.empty() && !ReloadAnimation(options_.animation))throw std::runtime_error(scene_.Status());
+        if(options_.bindPose){scene_.Animation(3)->playback.bindPose=true;scene_.Animation(3)->playback.playing=false;}
         settings_.vsync=!options_.noVsync;
-        if(!options_.vfx.empty()) {if(!renderer_.ReloadVfx(options_.vfx))throw std::runtime_error(renderer_.Vfx()->Status());renderer_.Vfx()->Play(settings_.vfx.count);}
+        if(!options_.vfx.empty()) {if(!ReloadVfx(options_.vfx))throw std::runtime_error(scene_.Status());scene_.Effect(4)->Play(legacy_.vfx.count);}
         for (size_t slot = 0; slot < options_.assets.size(); ++slot)
-            if (!options_.assets[slot].empty() && !renderer_.ReloadModel(slot,options_.assets[slot]))
-                throw std::runtime_error(renderer_.AssetStatus());
+            if (!options_.assets[slot].empty() && !ReloadModel(slot,options_.assets[slot]))
+                throw std::runtime_error(scene_.Status());
         if (options_.assetSmoke && options_.assets[1].empty()) {
             options_.assets[1] = options_.assets[0];
-            if (!renderer_.ReloadModel(1,options_.assets[1])) throw std::runtime_error(renderer_.AssetStatus());
+            if (!ReloadModel(1,options_.assets[1])) throw std::runtime_error(scene_.Status());
         }
         if (options_.smoke) settings_.showModels = false;
-        if(options_.vfxCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.vfx.scale=1;settings_.clear={0.2f,0.3f,0.4f,1};}
-        if(options_.integrationSmoke){settings_.vfx.followSocket=true;settings_.vfx.joint=5;renderer_.Vfx()->Play(4);}
-        if(options_.animationCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.unlit=true;settings_.animated={{0,0,0},0,1};auto& p=renderer_.Animation()->playback;p.time=0.5f;p.playing=false;}
-        if(options_.vfxDepthCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.unlit=true;settings_.models[0]={{0.5f,0,0},0,1};settings_.vfx.scale=1;}
+        if(options_.vfxCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;legacy_.vfx.scale=1;settings_.clear={0.2f,0.3f,0.4f,1};}
+        if(options_.integrationSmoke){legacy_.vfx.followSocket=true;legacy_.vfx.joint=5;scene_.Effect(4)->Play(4);}
+        if(options_.animationCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.unlit=true;legacy_.animated={{0,0,0},0,1};auto& p=scene_.Animation(3)->playback;p.time=0.5f;p.playing=false;}
+        if(options_.vfxDepthCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.unlit=true;legacy_.models[0]={{0.5f,0,0},0,1};legacy_.vfx.scale=1;}
         if (options_.assetCheck) {
             settings_.cameraYaw = settings_.cameraPitch = 0;
             settings_.cameraDistance = 6; settings_.unlit = true;
-            settings_.models[0] = ModelPose{{0.5f,0,0},0,1};
+            legacy_.models[0] = ModelPose{{0.5f,0,0},0,1};
+        }
+        if (!options_.scene.empty()) {
+            if (!scene_.Open(options_.scene)) throw std::runtime_error(scene_.Status());
+        } else {
+            ConfigureLegacyScene();
+            settings_.diagnosticTriangle = scene_.Document().assets.empty() || options_.smoke;
         }
         if (overlay_) {
-            overlay_->Initialize(window_, renderer_, log_);
+            overlay_->Initialize(window_, renderer_, scene_, log_);
             overlayReady_ = true;
         }
         ShowWindow(window_, SW_SHOW);
@@ -192,37 +216,37 @@ public:
             }
             renderer_.Resize(pendingWidth_, pendingHeight_);
             if(!options_.vfxUpdate.empty()) {
-                if(stats_.frames==1){if(!renderer_.ReloadVfx(options_.vfxUpdate))throw std::runtime_error("Changed VFX reload failed");renderer_.Vfx()->Play(1);}
+                if(stats_.frames==1){if(!ReloadVfx(options_.vfxUpdate))throw std::runtime_error("Changed VFX reload failed");scene_.Effect(4)->Play(1);}
                 // ディレクトリの読込を失敗させ、正常な更新後の表示を画素比較で確認する。
-                if(stats_.frames==2 && (renderer_.ReloadVfx(options_.vfxUpdate.parent_path()) || renderer_.Vfx()->Instances()!=1))
+                if(stats_.frames==2 && (ReloadVfx(options_.vfxUpdate.parent_path()) || scene_.Effect(4)->Instances()!=1))
                     throw std::runtime_error("Failed VFX reload changed retained instance");
             }
             if(options_.integrationSmoke) {
-                if(stats_.frames==16 && !renderer_.ReloadAnimation(options_.animation))throw std::runtime_error("Animation reload failed");
-                if(stats_.frames==17){auto* old=renderer_.Animation();if(renderer_.ReloadAnimation(options_.animation.parent_path()/"invalid.cskin") || old!=renderer_.Animation())throw std::runtime_error("Failed animation reload replaced old asset");}
-                if(stats_.frames==32){if(!renderer_.ReloadVfx(options_.vfx))throw std::runtime_error("Effect reload failed");renderer_.Vfx()->Play(4);}
-                if(stats_.frames==33){const int count=renderer_.Vfx()->Instances();if(renderer_.ReloadVfx(options_.vfx.parent_path()/"missing.efkefc") || count!=renderer_.Vfx()->Instances())throw std::runtime_error("Failed VFX reload changed playback");}
-                if(stats_.frames==64){renderer_.Vfx()->Stop();if(renderer_.Vfx()->Instances()!=0)throw std::runtime_error("VFX stop failed");}
-                if(stats_.frames==65)renderer_.Vfx()->Play(16);
+                if(stats_.frames==16 && !ReloadAnimation(options_.animation))throw std::runtime_error("Animation reload failed");
+                if(stats_.frames==17){auto* old=scene_.Animation(3);if(ReloadAnimation(options_.animation.parent_path()/"invalid.cskin") || old!=scene_.Animation(3))throw std::runtime_error("Failed animation reload replaced old asset");}
+                if(stats_.frames==32){if(!ReloadVfx(options_.vfx))throw std::runtime_error("Effect reload failed");scene_.Effect(4)->Play(4);}
+                if(stats_.frames==33){const int count=scene_.Effect(4)->Instances();if(ReloadVfx(options_.vfx.parent_path()/"missing.efkefc") || count!=scene_.Effect(4)->Instances())throw std::runtime_error("Failed VFX reload changed playback");}
+                if(stats_.frames==64){scene_.Effect(4)->Stop();if(scene_.Effect(4)->Instances()!=0)throw std::runtime_error("VFX stop failed");}
+                if(stats_.frames==65)scene_.Effect(4)->Play(16);
                 if(stats_.frames>=70)settings_.cameraYaw+=0.002f;
             }
             if (options_.assetCheck && !options_.assetUpdate.empty()) {
-                if (stats_.frames == 1 && !renderer_.ReloadModel(0,options_.assetUpdate))
+                if (stats_.frames == 1 && !ReloadModel(0,options_.assetUpdate))
                     throw std::runtime_error("Changed fixture reload failed");
                 if (stats_.frames == 2) {
-                    const auto generation = renderer_.ModelGeneration(0);
-                    if (renderer_.ReloadModel(0,options_.assetUpdate.parent_path()/L"invalid.cmesh") || renderer_.ModelGeneration(0) != generation)
+                    const auto generation = legacyGenerations_.at(0);
+                    if (ReloadModel(0,options_.assetUpdate.parent_path()/L"invalid.cmesh") || legacyGenerations_.at(0) != generation)
                         throw std::runtime_error("Corrupt update replaced live model");
                 }
             }
             if (options_.assetSmoke && stats_.frames >= 16 && stats_.frames < 24) {
-                const auto generation = renderer_.ModelGeneration(0);
+                const auto generation = legacyGenerations_.at(0);
                 if (stats_.frames % 2 == 0) {
-                    if (!renderer_.ReloadModel(0,options_.assets[0]) || renderer_.ModelGeneration(0) != generation+1)
+                    if (!ReloadModel(0,options_.assets[0]) || legacyGenerations_.at(0) != generation+1)
                         throw std::runtime_error("Valid model reload failed");
                 } else {
                     // A directory cannot be a valid cooked package. No user files are altered.
-                    if (renderer_.ReloadModel(0,options_.assets[0].parent_path()) || renderer_.ModelGeneration(0) != generation)
+                    if (ReloadModel(0,options_.assets[0].parent_path()) || legacyGenerations_.at(0) != generation)
                         throw std::runtime_error("Failed reload changed live model generation");
                 }
             }
@@ -232,7 +256,7 @@ public:
             stats_.frameMs = dt * 1000;
             if (overlay_) overlay_->Build(stats_, input_, settings_);
             if (!overlay_ || !overlay_->CapturesKeyboard()) {
-                if (input_.pressed[VK_ESCAPE]) { running_ = false; continue; }
+                if (input_.pressed[VK_ESCAPE] && (!overlay_ || overlay_->CanClose())) { running_ = false; continue; }
                 if (input_.pressed[VK_SPACE]) {
                     settings_.x = 0; settings_.y = 0;
                     log_.Write("Input: Space reset triangle");
@@ -243,8 +267,15 @@ public:
                 settings_.x = std::clamp(settings_.x, -1.2f, 0.6f);
                 settings_.y = std::clamp(settings_.y, -0.7f, 0.7f);
             }
-            renderer_.UpdatePresentation((options_.integrationSmoke||options_.vfxCheck)?1.0f/60.0f:static_cast<float>(std::min(dt,0.1)),settings_);
-            auto* list = renderer_.BeginFrame(settings_);
+            scene_.Update((options_.integrationSmoke||options_.vfxCheck)?1.0f/60.0f:static_cast<float>(std::min(dt,0.1)));
+            if (!options_.integrationSmoke) {
+                const auto& view = scene_.Document().view;
+                settings_.cameraYaw = view.yaw; settings_.cameraPitch = view.pitch; settings_.cameraDistance = view.distance;
+                settings_.clear = view.background; settings_.unlit = view.unlit;
+            }
+            auto* list = renderer_.BeginFrame(settings_, scene_.DrawItems(), settings_.diagnosticTriangle);
+            if (!settings_.diagnosticTriangle) scene_.DrawEffects(list);
+            renderer_.BeginOverlay();
             if (overlay_) overlay_->Draw(list);
             const bool last = options_.frameLimit && stats_.frames + 1 >= options_.frameLimit;
             const bool capture = last && (options_.smoke || options_.assetSmoke || options_.assetCheck || !options_.capture.empty());
@@ -272,7 +303,7 @@ public:
         }
         if (windowError_) std::rethrow_exception(windowError_);
         renderer_.WaitIdle();
-        if(options_.integrationSmoke && (!smokeResized_||!smokeRestoredSize_||!sawMinimize_||!sawRestore_||renderer_.Vfx()->Instances()!=16))throw std::runtime_error("Integration lifecycle/instances failed");
+        if(options_.integrationSmoke && (!smokeResized_||!smokeRestoredSize_||!sawMinimize_||!sawRestore_||scene_.Effect(4)->Instances()!=16))throw std::runtime_error("Integration lifecycle/instances failed");
         if(measuredFrames)log_.Write(std::format("PROFILE frames={} CPU record incl fence wait avg={:.3f} ms CPU excl fence wait avg={:.3f} ms GPU render avg={:.3f} ms vsync={} adapter={}",measuredFrames,cpuTotal/static_cast<double>(measuredFrames),cpuActiveTotal/static_cast<double>(measuredFrames),gpuTotal/static_cast<double>(measuredFrames),settings_.vsync,renderer_.AdapterName()));
         if (overlay_) overlay_->Shutdown();
         overlayReady_ = false;
@@ -280,9 +311,9 @@ public:
         renderer_.WaitIdle();
         if (options_.smoke && (!smokeResized_ || !smokeRestoredSize_ || !sawMinimize_ || !sawRestore_ || stats_.frames != 32))
             throw std::runtime_error("Smoke test lifecycle assertions failed");
-        if (options_.assetSmoke && (!smokeResized_ || !smokeRestoredSize_ || !sawMinimize_ || !sawRestore_ || stats_.frames != 32 || renderer_.ModelGeneration(0) != 5))
+        if (options_.assetSmoke && (!smokeResized_ || !smokeRestoredSize_ || !sawMinimize_ || !sawRestore_ || stats_.frames != 32 || legacyGenerations_.at(0) != 5))
             throw std::runtime_error("Asset smoke lifecycle/reload assertions failed");
-        renderer_.ReleasePreviewAssets();
+        scene_.Clear();
         log_.Write(std::format("Shutdown: frames={}, Debug Layer errors={}, resize/minimize/restore={}/{}/{}",
             stats_.frames, renderer_.DiagnosticErrors(), smokeResized_, sawMinimize_, sawRestore_));
         if (renderer_.DiagnosticErrors()) return 1;
@@ -291,6 +322,60 @@ public:
         return 0;
     }
 private:
+    void EnsureLegacyEntities() {
+        if (!scene_.Document().entities.empty()) return;
+        SceneDocument document;
+        document.Add("Static 1"); document.Add("Static 2");
+        document.Add("Character"); document.Add("Effect");
+        if (!scene_.Apply(std::move(document))) throw std::runtime_error(scene_.Status());
+    }
+    bool ReloadModel(size_t slot, const std::filesystem::path& path) {
+        EnsureLegacyEntities();
+        const bool success = scene_.AssignAsset(slot + 1, path, SceneAssetKind::Static);
+        if (success) ++legacyGenerations_.at(slot);
+        return success;
+    }
+    bool ReloadAnimation(const std::filesystem::path& path) {
+        EnsureLegacyEntities();
+        return scene_.AssignAsset(3, path, SceneAssetKind::Skeletal);
+    }
+    bool ReloadVfx(const std::filesystem::path& path) {
+        EnsureLegacyEntities();
+        return scene_.AssignAsset(4, path, SceneAssetKind::Effect);
+    }
+    void ConfigureLegacyScene() {
+        // 旧CLIの配置をSceneへ一度だけ変換する。以後の編集と描画は共通経路を通る。
+        EnsureLegacyEntities();
+        auto document = scene_.Document();
+        const auto pose = [](const ModelPose& value) {
+            Transform transform;
+            transform.position = value.position;
+            transform.scale.fill(value.scale);
+            DirectX::XMFLOAT4 rotation;
+            DirectX::XMStoreFloat4(&rotation, DirectX::XMQuaternionRotationAxis(DirectX::XMVectorSet(0,1,0,0), value.yaw));
+            transform.rotation = {rotation.x, rotation.y, rotation.z, rotation.w};
+            return transform;
+        };
+        document.Entity(1).local = pose(legacy_.models[0]);
+        document.Entity(2).local = pose(legacy_.models[1]);
+        document.Entity(3).local = pose(legacy_.animated);
+        if (auto* animation = scene_.Animation(3)) {
+            const auto& playback = animation->playback;
+            document.Entity(3).animation = {animation->Asset().clips[playback.clip].name, playback.time, playback.speed,
+                playback.loop, playback.playing, playback.restPose, playback.bindPose};
+        }
+        auto& effect = document.Entity(4);
+        effect.local.position = legacy_.vfx.position;
+        effect.local.scale.fill(legacy_.vfx.scale);
+        effect.effect.count = options_.integrationSmoke ? 4 : legacy_.vfx.count;
+        if (legacy_.vfx.followSocket && scene_.Animation(3)) {
+            effect.effect.follow = 3;
+            effect.effect.joint = scene_.Animation(3)->Asset().joints.at(legacy_.vfx.joint).name;
+        }
+        document.view = {settings_.clear, settings_.cameraYaw, settings_.cameraPitch, settings_.cameraDistance, settings_.unlit};
+        if (!scene_.Apply(std::move(document))) throw std::runtime_error(scene_.Status());
+        scene_.MarkClean();
+    }
     void SetClientSize(UINT width, UINT height) {
         RECT rect{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
         CheckWin32(AdjustWindowRectExForDpi(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0, GetDpiForWindow(window_)), "Adjust smoke-test bounds");
@@ -351,7 +436,7 @@ private:
             if (!overlay_ && GetCapture() == window) ReleaseCapture();
             break;
         case WM_CAPTURECHANGED: input_.leftMouse = false; break;
-        case WM_CLOSE: running_ = false; log_.Write("WM_CLOSE requested orderly shutdown"); return 0;
+        case WM_CLOSE: if (overlayReady_ && !options_.frameLimit && !overlay_->CanClose()) return 0; running_ = false; log_.Write("WM_CLOSE requested orderly shutdown"); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         }
         return handled ? 1 : DefWindowProcW(window, message, w, l);
@@ -362,6 +447,9 @@ private:
     Log& log_;
     Options options_;
     Renderer renderer_;
+    SceneRuntime scene_;
+    LegacyPreview legacy_;
+    std::array<uint64_t, 2> legacyGenerations_{};
     HWND window_ = nullptr;
     bool registered_ = false, overlayReady_ = false, running_ = true, minimized_ = false, sizing_ = false;
     bool smokeResized_ = false, smokeRestoredSize_ = false, sawMinimize_ = false, sawRestore_ = false;

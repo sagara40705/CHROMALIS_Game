@@ -1,0 +1,12 @@
+include(FetchContent)
+set(CHROMALIS_JSON_ARCHIVE "https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz" CACHE STRING "Pinned JSON 3.12.0 archive URL or local path")
+set(JSON_BuildTests OFF CACHE BOOL "Build JSON tests" FORCE)
+FetchContent_Declare(nlohmann_json URL "${CHROMALIS_JSON_ARCHIVE}"
+  URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa)
+FetchContent_MakeAvailable(nlohmann_json)
+add_library(ChromalisScene STATIC src/scene/Scene.cpp src/scene/SceneIO.cpp)
+target_include_directories(ChromalisScene PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(ChromalisScene PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(ChromalisScene PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
+target_link_libraries(ChromalisScene PRIVATE nlohmann_json::nlohmann_json)
+configure_file("${nlohmann_json_SOURCE_DIR}/LICENSE.MIT" "${CHROMALIS_RUNTIME_LICENSE_DIR}/nlohmann-json.txt" COPYONLY)
