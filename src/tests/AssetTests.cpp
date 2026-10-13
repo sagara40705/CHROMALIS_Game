@@ -4,10 +4,12 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
+#include <limits>
 
 using namespace chromalis;
 namespace {
@@ -21,6 +23,10 @@ void Reject(const std::function<void()>& action, const char* what) {
     throw std::runtime_error(std::string("Expected rejection: ")+what);
 }
 void U32(std::vector<uint8_t>& bytes, uint32_t v) { for (int n=0;n<4;++n) bytes.push_back(static_cast<uint8_t>(v>>(n*8))); }
+std::string Replace(std::string text, const std::string& from, const std::string& to) {
+    const auto at = text.find(from); Require(at != std::string::npos,"Missing test replacement token");
+    text.replace(at,from.size(),to); return text;
+}
 void MakePng(const std::filesystem::path& path) {
     using Microsoft::WRL::ComPtr;
     Require(SUCCEEDED(CoInitializeEx(nullptr,COINIT_MULTITHREADED)),"Test COM init");
@@ -80,6 +86,57 @@ int wmain(int argc, wchar_t** argv) {
         const auto original = ReadAssetBytes(root/L"scene.cmesh");
         const auto loaded = LoadStaticAsset(root/L"scene.cmesh");
         Require(loaded.textures[1].rgba==asset.textures[1].rgba && loaded.id==asset.id,"Cooked roundtrip failed");
+        const std::string oldNodes = R"("nodes":[{"mesh":0,"translation":[0,0,1]},{"mesh":1}])";
+        const auto nodes = [&](const std::string& text) {
+            Text(root/L"scaled.gltf",Replace(json,oldNodes,"\"nodes\":"+text));
+            return CookStatic(root/L"scaled.gltf","tests/scale");
+        };
+        const auto closeEnough = [](float a, float b) { return std::abs(a-b) <= std::max(std::abs(b)*1e-5f,1e-10f); };
+        const auto tiny = nodes(R"([{"mesh":0,"scale":[0.001,0.001,0.001]},{"mesh":1}])");
+        Require(closeEnough(tiny.vertices[0].position[0],-0.001f) && closeEnough(tiny.vertices[0].normal[2],-1),"Millimeter-scale transform failed");
+        const auto nested = nodes(R"([{"scale":[0.001,0.001,0.001],"children":[2]},{"mesh":1},{"mesh":0,"scale":[0.001,0.001,0.001],"translation":[0,0,1]}])");
+        Require(closeEnough(nested.vertices[0].position[0],-0.000001f) && closeEnough(nested.vertices[0].position[2],-0.001f) && closeEnough(nested.vertices[0].normal[2],-1),"Parent/child small scales failed");
+        const auto balanced = nodes(R"([{"scale":[1000,1000,1000],"children":[2]},{"mesh":1},{"mesh":0,"scale":[0.001,0.001,0.001]}])");
+        Require(closeEnough(balanced.vertices[0].position[0],-1),"Opposing parent/child scales failed");
+        const auto mirrored = nodes(R"([{"scale":[-0.001,0.002,0.003],"children":[2]},{"mesh":1},{"mesh":0,"scale":[0.001,0.001,0.001]}])");
+        Require(closeEnough(mirrored.vertices[0].position[0],0.000001f) && closeEnough(mirrored.vertices[0].position[1],-0.000002f) && mirrored.indices[1]==1 && closeEnough(mirrored.vertices[0].normal[2],-1),"Mirrored small hierarchy failed");
+        Reject([&] { (void)nodes(R"([{"mesh":0,"scale":[0,1,1]},{"mesh":1}])"); },"Zero scale");
+        Reject([&] { (void)nodes(R"([{"scale":[0,1,1],"children":[2]},{"mesh":1},{"mesh":0,"scale":[0.001,0.001,0.001]}])"); },"Zero parent scale");
+        Reject([&] { (void)nodes(R"([{"children":[2]},{"mesh":1},{"mesh":0,"scale":[1,0,1]}])"); },"Zero child scale");
+        Reject([&] { (void)nodes(R"([{"mesh":0,"matrix":[1,0,0,0,1,0,0,0,0,0,1,0,0,0,0,1]},{"mesh":1}])"); },"Collinear basis");
+        Reject([&] { (void)nodes(R"([{"mesh":0,"scale":[1e999,1,1]},{"mesh":1}])"); },"Nonfinite scale");
+        // A non-axis normal distinguishes inverse-transpose from a direct position transform.
+        auto normalBytes = binary;
+        for (size_t v = 0; v < 4; ++v) { const float n[]{0.70710678f,0,0.70710678f}; std::memcpy(normalBytes.data()+v*sizeof(MeshVertex)+12,n,sizeof(n)); }
+        Write(root/L"normal.bin",normalBytes);
+        Text(root/L"normal.gltf",Replace(Replace(json,oldNodes,R"("nodes":[{"mesh":0,"scale":[0.001,0.002,0.003]},{"mesh":1}])"),"scene.bin","normal.bin"));
+        const auto nonuniform = CookStatic(root/L"normal.gltf","tests/normal");
+        Require(closeEnough(nonuniform.vertices[0].normal[0],3/std::sqrt(10.0f)) && closeEnough(nonuniform.vertices[0].normal[2],-1/std::sqrt(10.0f)),"Nonuniform inverse-transpose normal failed");
+        const auto cutoffJson = [&](const std::string& cutoff) { return Replace(json,R"("materials":[{)",R"("materials":[{"alphaMode":"MASK","alphaCutoff":)"+cutoff+","); };
+        for (const std::string cutoff : {"0","0.5","1.5"}) {
+            Text(root/L"cutoff.gltf",cutoffJson(cutoff));
+            const auto masked = CookStatic(root/L"cutoff.gltf","tests/cutoff");
+            Require(masked.materials[1].alphaMask==1 && masked.materials[1].cutoff==std::stof(cutoff),"Cutoff import changed value");
+            SaveStaticAsset(masked,root/L"cutoff.cmesh");
+            Require(LoadStaticAsset(root/L"cutoff.cmesh").materials[1].cutoff==std::stof(cutoff),"Cutoff roundtrip changed value");
+        }
+        for (const std::string cutoff : {"-0.1","1e999"}) {
+            Text(root/L"cutoff.gltf",cutoffJson(cutoff));
+            Reject([&] { (void)CookStatic(root/L"cutoff.gltf","tests/cutoff"); },"Invalid imported cutoff");
+        }
+        for (float cutoff : {-1.0f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+            auto invalidCutoff = asset; invalidCutoff.materials[1].cutoff = cutoff;
+            Reject([&] { SaveStaticAsset(invalidCutoff,root/L"bad-cutoff.cmesh"); },"Invalid saved cutoff");
+        }
+        auto invalidPbr = asset; invalidPbr.materials[1].roughness = 1.5f;
+        Reject([&] { ValidateAsset(invalidPbr); },"Roughness upper bound");
+        invalidPbr = asset; invalidPbr.materials[1].metallic = 1.5f;
+        Reject([&] { ValidateAsset(invalidPbr); },"Metallic upper bound");
+        // Dedicated midtone fixture. Keep the original four-color fixture unchanged.
+        auto midtone = asset; midtone.id = "tests/srgb"; midtone.parts.resize(1); midtone.indices.resize(6);
+        midtone.textures[1] = {1,1,{128,96,160,255}};
+        midtone.materials[1].baseColor = {0.5f,0.25f,0.75f,1};
+        SaveStaticAsset(midtone,root/L"midtone.cmesh");
         Text(root/L"flat.gltf",SceneJson(buffer,image,true));
         auto flat = CookStatic(root/L"flat.gltf","tests/flat"); Require(flat.vertices.size()==10,"Missing normals not expanded to flat corners");
         // Same asset as GLB, including embedded PNG image and interleaved vertices.

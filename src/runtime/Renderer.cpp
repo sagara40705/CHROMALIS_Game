@@ -30,7 +30,14 @@ Renderer::~Renderer() {
     // Also covers exceptions during partial initialization. No exceptions cross teardown.
     try { WaitIdle(); } catch (const std::exception& e) { log_.Write(e.what()); }
     for (auto& frame : frames_) if (frame.mapped) frame.constants->Unmap(0, nullptr);
+    for (auto& frame : frames_) if (frame.bonesMapped) frame.bones->Unmap(0,nullptr);
     if (fenceEvent_) CloseHandle(fenceEvent_);
+}
+void Renderer::ReleasePreviewAssets() {
+    // GPUの使用終了後にプレビューの全リソースを解放し、終了診断へ含める。
+    WaitIdle();vfx_.reset();animation_.reset();animatedModel_.reset();
+    for(auto& model:models_)model.reset();
+    DrainDiagnostics();
 }
 void Renderer::Initialize(HWND window, UINT width, UINT height, const RendererOptions& options) {
     UINT factoryFlags = 0;
@@ -107,10 +114,13 @@ void Renderer::Initialize(HWND window, UINT width, UINT height, const RendererOp
     Check(initialSwap.As(&swapChain_), "Query swap chain 3");
     Check(factory_->MakeWindowAssociation(window, DXGI_MWA_NO_ALT_ENTER), "Disable exclusive Alt+Enter");
     D3D12_DESCRIPTOR_HEAP_DESC rtv{};
-    rtv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; rtv.NumDescriptors = FrameCount;
+    rtv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; rtv.NumDescriptors = FrameCount*2;
     Check(device_->CreateDescriptorHeap(&rtv, IID_PPV_ARGS(&rtvHeap_)), "Create RTV heap");
     rtvStride_ = device_->GetDescriptorHandleIncrementSize(rtv.Type);
     CreateTargets();
+    D3D12_QUERY_HEAP_DESC queries{};queries.Type=D3D12_QUERY_HEAP_TYPE_TIMESTAMP;queries.Count=FrameCount*2;
+    Check(device_->CreateQueryHeap(&queries,IID_PPV_ARGS(&timestampHeap_)),"Create GPU timestamps");
+    Check(queue_->GetTimestampFrequency(&timestampFrequency_),"Get GPU timestamp frequency");
     for (auto& frame : frames_) {
         Check(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&frame.allocator)), "Create command allocator");
         const auto heap = Heap(D3D12_HEAP_TYPE_UPLOAD);
@@ -119,6 +129,12 @@ void Renderer::Initialize(HWND window, UINT width, UINT height, const RendererOp
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&frame.constants)), "Create per-frame upload constants");
         D3D12_RANGE noRead{0, 0};
         Check(frame.constants->Map(0, &noRead, reinterpret_cast<void**>(&frame.mapped)), "Map upload constants");
+        const auto bones=BufferDesc(256*128);
+        Check(device_->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&bones,D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&frame.bones)),"Create frame bone palette");
+        Check(frame.bones->Map(0,&noRead,reinterpret_cast<void**>(&frame.bonesMapped)),"Map frame bone palette");
+        const auto readHeap=Heap(D3D12_HEAP_TYPE_READBACK);
+        const auto timestamps=BufferDesc(16);
+        Check(device_->CreateCommittedResource(&readHeap,D3D12_HEAP_FLAG_NONE,&timestamps,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&frame.timestamps)),"Create timestamp readback");
     }
     Check(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frames_[0].allocator.Get(), nullptr, IID_PPV_ARGS(&list_)), "Create command list");
     Check(list_->Close(), "Close initial command list");
@@ -134,6 +150,9 @@ void Renderer::CreateTargets() {
         const auto name = std::format(L"BackBuffer {}", i);
         Check(targets_[i]->SetName(name.c_str()), "Name back buffer");
         device_->CreateRenderTargetView(targets_[i].Get(), nullptr, handle);
+        auto scene=handle;scene.ptr+=FrameCount*rtvStride_;
+        D3D12_RENDER_TARGET_VIEW_DESC view{};view.Format=SceneFormat;view.ViewDimension=D3D12_RTV_DIMENSION_TEXTURE2D;
+        device_->CreateRenderTargetView(targets_[i].Get(),&view,scene);
         handle.ptr += rtvStride_;
     }
 }
@@ -225,9 +244,14 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings) 
     auto& frame = frames_[frameIndex_];
     const auto start = std::chrono::steady_clock::now();
     WaitFor(frame.fence);
+    if(frame.fence) {
+        UINT64* times=nullptr;D3D12_RANGE range{0,16};Check(frame.timestamps->Map(0,&range,reinterpret_cast<void**>(&times)),"Read completed GPU timestamps");
+        gpuFrameMs_=static_cast<double>(times[1]-times[0])*1000.0/static_cast<double>(timestampFrequency_);D3D12_RANGE noWrite{0,0};frame.timestamps->Unmap(0,&noWrite);
+    }
     fenceWaitMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     CheckDevice(frame.allocator->Reset(), "Reset frame allocator after its fence");
     CheckDevice(list_->Reset(frame.allocator.Get(), pipeline_.Get()), "Reset command list");
+    list_->EndQuery(timestampHeap_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,frameIndex_*2);
     const std::array<float, 4> constants{settings.x, settings.y, static_cast<float>(width_) / static_cast<float>(height_), settings.scale};
     std::memcpy(frame.mapped, constants.data(), sizeof(constants));
     lastClear_ = settings.clear;
@@ -240,16 +264,28 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings) 
     const D3D12_RECT rect{0, 0, static_cast<LONG>(width_), static_cast<LONG>(height_)};
     list_->RSSetViewports(1, &viewport); list_->RSSetScissorRects(1, &rect);
     list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    if (settings.showModels && (models_[0] || models_[1])) {
+    const bool sceneVisible=settings.showModels && (models_[0] || models_[1] || animatedModel_);
+    if (sceneVisible || vfx_) {
+        auto scene=rtv;scene.ptr+=FrameCount*rtvStride_;
         auto dsv = dsv_->GetCPUDescriptorHandleForHeapStart();
-        list_->OMSetRenderTargets(1,&rtv,FALSE,&dsv);
+        list_->OMSetRenderTargets(1,&scene,FALSE,&dsv);
         list_->ClearDepthStencilView(dsv,D3D12_CLEAR_FLAG_DEPTH,1,0,0,nullptr);
-        DrawModels(settings);
+        if(sceneVisible)DrawModels(settings);
+        if(vfx_) {
+            using namespace DirectX;
+            const float cp=std::cos(settings.cameraPitch),sp=std::sin(settings.cameraPitch);
+            auto eye=XMVectorSet(std::sin(settings.cameraYaw)*cp*settings.cameraDistance,sp*settings.cameraDistance,-std::cos(settings.cameraYaw)*cp*settings.cameraDistance,1);
+            XMFLOAT4X4 view,projection;XMStoreFloat4x4(&view,XMMatrixLookAtLH(eye,XMVectorZero(),XMVectorSet(0,1,0,0)));
+            XMStoreFloat4x4(&projection,XMMatrixPerspectiveFovLH(XM_PIDIV4,static_cast<float>(width_)/static_cast<float>(height_),0.05f,500));
+            vfx_->Draw(frameIndex_,list_.Get(),view,projection);
+        }
     } else {
         list_->SetGraphicsRootSignature(root_.Get());
         list_->SetGraphicsRootConstantBufferView(0, frame.constants->GetGPUVirtualAddress());
         list_->DrawInstanced(3, 1, 0, 0);
     }
+    // ImGuiは表示色を出力するため、最後にUNORMのViewへ戻す。
+    list_->OMSetRenderTargets(1,&rtv,FALSE,nullptr);
     return list_.Get();
 }
 void Renderer::PrepareCapture() {
@@ -269,6 +305,8 @@ void Renderer::PrepareCapture() {
     Transition(D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
 }
 bool Renderer::EndFrame(bool vsync, bool capture) {
+    list_->EndQuery(timestampHeap_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,frameIndex_*2+1);
+    list_->ResolveQueryData(timestampHeap_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,frameIndex_*2,2,frames_[frameIndex_].timestamps.Get(),0);
     if (capture) PrepareCapture();
     else Transition(D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     CheckDevice(list_->Close(), "Close frame command list");
@@ -287,7 +325,7 @@ bool Renderer::TestVisible() {
     CheckDevice(hr, "Test swap-chain visibility");
     return hr != DXGI_STATUS_OCCLUDED;
 }
-void Renderer::SaveCapture(const std::filesystem::path& path, bool verifyTriangle, bool verifyAsset, bool updatedAsset) {
+void Renderer::SaveCapture(const std::filesystem::path& path, bool verifyTriangle, AssetCaptureCheck assetCheck) {
     WaitIdle();
     std::vector<unsigned char> pixels(static_cast<size_t>(width_) * height_ * 4);
     unsigned char* mapped = nullptr;
@@ -332,11 +370,30 @@ void Renderer::SaveCapture(const std::filesystem::path& path, bool verifyTriangl
         if (!stream) throw std::runtime_error("Cannot save GPU capture: " + path.string());
         log_.Write("GPU capture saved: " + path.string());
     }
-    if (verifyAsset) {
+    if (assetCheck == AssetCaptureCheck::VfxAlpha) {
+        const auto decode=[](double v){return v<=0.04045?v/12.92:std::pow((v+0.055)/1.055,2.4);};
+        const auto encode=[](double v){return v<=0.0031308?v*12.92:1.055*std::pow(v,1.0/2.4)-0.055;};
+        const double alpha=128.0/255.0;const int texture[]{160,96,128};
+        const auto at=(static_cast<size_t>(height_/2)*width_+width_/2)*4;
+        for(size_t c=0;c<3;++c){const int expected=static_cast<int>(std::lround(255*encode(decode(texture[c]/255.0)*alpha*alpha+decode(lastClear_[2-c])*(1-alpha))));if(std::abs(static_cast<int>(pixels[at+c])-expected)>3)throw std::runtime_error(std::format("VFX linear alpha mismatch: channel {}, actual {}, expected {}",c,pixels[at+c],expected));}
+        log_.Write("VFX PIXELS PASS: sRGB texture, linear vertex color factor, straight alpha blend and sRGB RTV output");
+    }
+    if (assetCheck == AssetCaptureCheck::Midtone) {
+        // Input sRGB bytes RGB=(128,96,160), linear factors=(0.5,0.25,0.75).
+        // Independent IEC sRGB calculation, rounded to UNORM8: RGB=(92,48,140).
+        // Missing decode, gamma-space multiply, or missing/double output encode must fail.
+        const int expectedBgr[]{140,48,92};
+        const auto at = (static_cast<size_t>(height_/2)*width_+width_/2)*4;
+        for (size_t c = 0; c < 3; ++c)
+            if (std::abs(static_cast<int>(pixels[at+c])-expectedBgr[c]) > 2)
+                throw std::runtime_error("Midtone pixels failed: sRGB decode / linear factor / output encode mismatch");
+        log_.Write("MIDTONE PIXELS PASS: sRGB texture decode, linear factors and SDR output encoding");
+    }
+    if (assetCheck == AssetCaptureCheck::Corners || assetCheck == AssetCaptureCheck::UpdatedCorners) {
         // Authored fixture: near textured quad drawn before a farther solid-blue quad.
         // Camera at (0,0,-6), near quad z=-1, world x=0.5; FOV=45 degrees.
         const float focal = static_cast<float>(height_) * 0.5f / std::tan(DirectX::XM_PIDIV4 * 0.5f);
-        const float distance = updatedAsset ? 4.0f : 5.0f;
+        const float distance = assetCheck == AssetCaptureCheck::UpdatedCorners ? 4.0f : 5.0f;
         const int cx = static_cast<int>(static_cast<float>(width_) * 0.5f + focal * 0.5f / distance);
         const int cy = static_cast<int>(height_ / 2);
         const int offset = static_cast<int>(focal * 0.8f / distance);

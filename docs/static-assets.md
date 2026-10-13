@@ -20,7 +20,11 @@ Skinning, animations, morph targets, Draco primitives, non-triangle primitives, 
 
 Runtime is left handed, +Y up, +Z forward, meters. Cooker reflects glTF Z, transforms normals by inverse transpose, and adjusts triangle winding including mirrored nodes. UV/image rows are not flipped. CPU DirectXMath uses row vectors; DXC `-Zpr` and HLSL `row_major` use `position * world * view * projection`. The LH camera looks at the origin; projection uses depth 0..1 and D32 LESS depth testing. Preview world scale is positive/uniform; imported nodes may have nonsingular nonuniform/mirrored scale.
 
-Base-color texture SRVs are sRGB, factors/lighting are linear, and the mesh shader explicitly encodes the result to sRGB for the existing SDR R8G8B8A8_UNORM output. Opaque output and cutout masks only. The 0A diagnostic triangle and ImGui remain display-color paths. Preview lighting is a single simple directional term with an unlit toggle, without shadows or PBR.
+Node invertibility is checked using the determinant of unit-length basis vectors (double precision, dimensionless threshold 1e-7), rather than absolute world determinant magnitude. Small uniform scale and composed parent/child scales are accepted. Zero, nonfinite and nearly collinear bases are rejected. The inverse-transpose normal matrix is rescaled by a common positive factor before float conversion and normal normalization. This avoids rejecting ordinary millimeter-scale assets while retaining a numerical conditioning guard. Values that cannot be represented in the float runtime contract remain unsupported.
+
+`alphaCutoff` is finite and nonnegative with no upper bound of 1. It is retained exactly as a float, including values greater than 1: MASK then discards every fragment with glTF alpha in [0,1]. Metallic/roughness still require [0,1].
+
+Base-color texture SRVs are sRGB and factors/lighting are linear. Phase 0C moves output encoding from the mesh shader to an R8G8B8A8_UNORM_SRGB RTV on the existing SDR UNORM swap chain, allowing linear VFX blending. Opaque output and cutout masks only. The 0A diagnostic triangle and ImGui remain display-color paths. Preview lighting is a single simple directional term with an unlit toggle, without shadows or PBR. See [animation-vfx.md](animation-vfx.md) for the current rendering contract.
 
 Two independently transformed preview slots exercise multiple model drawing. They are a 0B host/UI limit, not a future world/entity design. A model contains all its primitive/material bindings.
 
@@ -34,6 +38,10 @@ ID expresses content identity; slot index locates a preview instance; generation
 
 Cooker writes a temporary sibling file, reads/validates it, then publishes with Windows atomic replacement. Failure retains the prior package. CLI refuses to overwrite a source dependency. Temporary files may remain after a process crash and can be removed manually. Imports are bounded to 512 MiB per file/combined buffers, 2M vertices, 6M indices, 1024 materials, 256 textures, 8192 dimensions/16M pixels per image, 256 MiB decoded image total. These are adjustable data-validation limits, not performance targets or promises of handling hostile inputs with fixed memory use.
 
+CLI `--report path` is optional. Only after a successful import establishes the complete dependency set does Cooker check output/report against input and dependencies, and output against report (canonical path, Windows case aliases, existing hard links). No report is opened or truncated before this validation. Import/argument/collision failures write diagnostics to stdout and return 1, leaving any previous report untouched. A validated report is opened without truncation, then updated only after cmesh publication; its parent directory must exist. Report I/O failure returns 1 and explicitly states if cmesh has already been published. Consumers must check the exit code rather than treating an old report as the current result. The Editor captures this invocation's stdout/stderr through a pipe and does not create or initialize a report file.
+
+The import recipe is now `recipe2` to identify the revised transform/material validation. The binary layout and format version remain 1. Recook sources to use the revised import behavior; existing valid version-1 packages still load.
+
 ## GPU ownership and replacement
 
 `Renderer` owns each model's default-heap VB/IB/textures and shader-visible SRV/sampler heaps. The CPU package is a temporary value released after upload. Material/primitive metadata survives in the GPU model. No caller owns raw GPU-resource references.
@@ -43,6 +51,8 @@ Loading builds a complete candidate without altering the live slot. A local dire
 Reload is synchronous and can pause the Editor. This is a deliberate 0B tradeoff. Per-frame allocator/upload reuse still requires that frame's fence. ImGui keeps its separate existing heap/retirement rules, rebound after model rendering. Depth is shared on the single ordered graphics queue and recreated after queue drain on resize. Runtime resource-state transitions remain inside Renderer, not Cooker or UI.
 
 ## Phase 0C boundary
+
+0Cの実装は別形式`.cskin`とEffekseerを追加した。以下は0B時点の境界判断を残したもの。現在の仕様は[animation-vfx.md](animation-vfx.md)を参照。
 
 Do not derive a skeleton or animation format from flattened static vertices. 0C must validate a representative rig and decide how node hierarchy, skeleton, animation clips and socket transforms are represented before changing the cooked version. Retain the offline-import/runtime-load separation and fence lifetime contract. VFX textures need their own linear/sRGB and alpha semantics; base-color sRGB is not a blanket rule for noise/masks. Mips/compression/asynchronous loading should follow measured content needs. No animation or VFX runtime is integrated in 0B.
 

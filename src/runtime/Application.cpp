@@ -19,7 +19,14 @@ struct Options {
     std::array<std::filesystem::path,2> assets;
     bool assetSmoke = false;
     bool assetCheck = false;
+    bool colorCheck = false;
     std::filesystem::path assetUpdate;
+    std::filesystem::path animation;
+    std::filesystem::path vfx;
+    std::filesystem::path vfxUpdate;
+    bool integrationSmoke=false,vfxCheck=false;
+    bool animationCheck=false,vfxDepthCheck=false;
+    bool bindPose=false,noVsync=false;
 };
 Options ParseOptions() {
     Options result;
@@ -47,7 +54,17 @@ Options ParseOptions() {
             else if (arg == L"--asset2") result.assets[1] = value();
             else if (arg == L"--asset-smoke") result.assetSmoke = true;
             else if (arg == L"--asset-check") result.assetCheck = true;
+            else if (arg == L"--color-check") { result.assetCheck = true; result.colorCheck = true; }
             else if (arg == L"--asset-update") result.assetUpdate = value();
+            else if (arg == L"--animation") result.animation=value();
+            else if (arg == L"--bind-pose") result.bindPose=true;
+            else if (arg == L"--no-vsync") result.noVsync=true;
+            else if (arg == L"--vfx") result.vfx=value();
+            else if (arg == L"--vfx-update") result.vfxUpdate=value();
+            else if (arg == L"--vfx-check") result.vfxCheck=true;
+            else if (arg == L"--integration-smoke") result.integrationSmoke=true;
+            else if (arg == L"--animation-check") result.animationCheck=true;
+            else if (arg == L"--vfx-depth-check") result.vfxDepthCheck=true;
             else if (arg == L"--frames") {
                 const auto text = value();
                 if (text.empty() || text.find_first_not_of(L"0123456789") != std::wstring_view::npos)
@@ -57,13 +74,20 @@ Options ParseOptions() {
             } else throw std::runtime_error("Unknown argument: " + Utf8(arg));
         }
         if (result.smoke) result.frameLimit = 32;
+        if(result.vfxCheck){if(result.vfx.empty())throw std::runtime_error("--vfx-check requires AlphaProbe.efkefc");result.frameLimit=4;}
+        if(result.animationCheck){if(result.animation.empty())throw std::runtime_error("--animation-check requires skinning.cskin");result.frameLimit=4;}
+        if(result.vfxDepthCheck){if(result.vfx.empty()||result.assets[0].empty())throw std::runtime_error("--vfx-depth-check requires effect and midtone mesh");result.frameLimit=4;}
+        if(result.integrationSmoke){if(result.animation.empty()||result.vfx.empty()||result.assets[0].empty())throw std::runtime_error("--integration-smoke requires static, animated and VFX assets");result.frameLimit=120;}
         if (result.assetCheck) {
             if (result.assets[0].empty()) throw std::runtime_error("--asset-check requires the corners-depth test asset");
             result.frameLimit = 4;
         }
         if (!result.assetUpdate.empty() && !result.assetCheck) throw std::runtime_error("--asset-update requires --asset-check");
-        if ((result.assetCheck && (result.assetSmoke || result.smoke)) || (result.assetSmoke && result.smoke))
+        if (result.colorCheck && !result.assetUpdate.empty()) throw std::runtime_error("--color-check does not accept --asset-update");
+        if (int(result.assetCheck)+int(result.assetSmoke)+int(result.smoke)+int(result.vfxCheck)+int(result.animationCheck)+int(result.vfxDepthCheck)+int(result.integrationSmoke)>1)
             throw std::runtime_error("Select only one smoke/pixel test mode");
+        if(result.bindPose && result.animation.empty())throw std::runtime_error("--bind-pose requires --animation");
+        if(!result.vfxUpdate.empty() && !result.vfxCheck)throw std::runtime_error("--vfx-update requires --vfx-check and AlphaProbe as the update");
         if (result.assetSmoke) {
             if (result.assets[0].empty()) throw std::runtime_error("--asset-smoke requires --asset");
             result.frameLimit = 32;
@@ -101,6 +125,10 @@ public:
         CheckWin32(GetClientRect(window_, &client), "Get initial client bounds");
         pendingWidth_ = static_cast<UINT>(client.right); pendingHeight_ = static_cast<UINT>(client.bottom);
         renderer_.Initialize(window_, pendingWidth_, pendingHeight_, options_.renderer);
+        if(!options_.animation.empty() && !renderer_.ReloadAnimation(options_.animation))throw std::runtime_error(renderer_.AssetStatus());
+        if(options_.bindPose){renderer_.Animation()->playback.bindPose=true;renderer_.Animation()->playback.playing=false;}
+        settings_.vsync=!options_.noVsync;
+        if(!options_.vfx.empty()) {if(!renderer_.ReloadVfx(options_.vfx))throw std::runtime_error(renderer_.Vfx()->Status());renderer_.Vfx()->Play(settings_.vfx.count);}
         for (size_t slot = 0; slot < options_.assets.size(); ++slot)
             if (!options_.assets[slot].empty() && !renderer_.ReloadModel(slot,options_.assets[slot]))
                 throw std::runtime_error(renderer_.AssetStatus());
@@ -109,6 +137,10 @@ public:
             if (!renderer_.ReloadModel(1,options_.assets[1])) throw std::runtime_error(renderer_.AssetStatus());
         }
         if (options_.smoke) settings_.showModels = false;
+        if(options_.vfxCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.vfx.scale=1;settings_.clear={0.2f,0.3f,0.4f,1};}
+        if(options_.integrationSmoke){settings_.vfx.followSocket=true;settings_.vfx.joint=5;renderer_.Vfx()->Play(4);}
+        if(options_.animationCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.unlit=true;settings_.animated={{0,0,0},0,1};auto& p=renderer_.Animation()->playback;p.time=0.5f;p.playing=false;}
+        if(options_.vfxDepthCheck){settings_.cameraYaw=settings_.cameraPitch=0;settings_.cameraDistance=6;settings_.unlit=true;settings_.models[0]={{0.5f,0,0},0,1};settings_.vfx.scale=1;}
         if (options_.assetCheck) {
             settings_.cameraYaw = settings_.cameraPitch = 0;
             settings_.cameraDistance = 6; settings_.unlit = true;
@@ -123,6 +155,7 @@ public:
         auto previous = Clock::now();
         const auto smokeDeadline = previous + std::chrono::seconds(30);
         double titleTime = 0;
+        double cpuTotal=0,cpuActiveTotal=0,gpuTotal=0;UINT64 measuredFrames=0;
         bool minimizedTest = false;
         bool visible = true;
         while (running_) {
@@ -133,8 +166,8 @@ public:
             }
             if (windowError_) std::rethrow_exception(windowError_);
             if (!running_) break;
-            if ((options_.smoke || options_.assetSmoke) && Clock::now() > smokeDeadline) throw std::runtime_error("Smoke test stalled for 30 seconds");
-            if (options_.smoke || options_.assetSmoke) {
+            if ((options_.smoke || options_.assetSmoke || options_.integrationSmoke) && Clock::now() > smokeDeadline) throw std::runtime_error("Smoke test stalled for 30 seconds");
+            if (options_.smoke || options_.assetSmoke || options_.integrationSmoke) {
                 if (stats_.frames == 4 && !smokeResized_) { SetClientSize(960, 600); smokeResized_ = true; }
                 if (stats_.frames == 8 && !minimizedTest) {
                     minimizedTest = true;
@@ -158,6 +191,21 @@ public:
                 }
             }
             renderer_.Resize(pendingWidth_, pendingHeight_);
+            if(!options_.vfxUpdate.empty()) {
+                if(stats_.frames==1){if(!renderer_.ReloadVfx(options_.vfxUpdate))throw std::runtime_error("Changed VFX reload failed");renderer_.Vfx()->Play(1);}
+                // ディレクトリの読込を失敗させ、正常な更新後の表示を画素比較で確認する。
+                if(stats_.frames==2 && (renderer_.ReloadVfx(options_.vfxUpdate.parent_path()) || renderer_.Vfx()->Instances()!=1))
+                    throw std::runtime_error("Failed VFX reload changed retained instance");
+            }
+            if(options_.integrationSmoke) {
+                if(stats_.frames==16 && !renderer_.ReloadAnimation(options_.animation))throw std::runtime_error("Animation reload failed");
+                if(stats_.frames==17){auto* old=renderer_.Animation();if(renderer_.ReloadAnimation(options_.animation.parent_path()/"invalid.cskin") || old!=renderer_.Animation())throw std::runtime_error("Failed animation reload replaced old asset");}
+                if(stats_.frames==32){if(!renderer_.ReloadVfx(options_.vfx))throw std::runtime_error("Effect reload failed");renderer_.Vfx()->Play(4);}
+                if(stats_.frames==33){const int count=renderer_.Vfx()->Instances();if(renderer_.ReloadVfx(options_.vfx.parent_path()/"missing.efkefc") || count!=renderer_.Vfx()->Instances())throw std::runtime_error("Failed VFX reload changed playback");}
+                if(stats_.frames==64){renderer_.Vfx()->Stop();if(renderer_.Vfx()->Instances()!=0)throw std::runtime_error("VFX stop failed");}
+                if(stats_.frames==65)renderer_.Vfx()->Play(16);
+                if(stats_.frames>=70)settings_.cameraYaw+=0.002f;
+            }
             if (options_.assetCheck && !options_.assetUpdate.empty()) {
                 if (stats_.frames == 1 && !renderer_.ReloadModel(0,options_.assetUpdate))
                     throw std::runtime_error("Changed fixture reload failed");
@@ -195,6 +243,7 @@ public:
                 settings_.x = std::clamp(settings_.x, -1.2f, 0.6f);
                 settings_.y = std::clamp(settings_.y, -0.7f, 0.7f);
             }
+            renderer_.UpdatePresentation((options_.integrationSmoke||options_.vfxCheck)?1.0f/60.0f:static_cast<float>(std::min(dt,0.1)),settings_);
             auto* list = renderer_.BeginFrame(settings_);
             if (overlay_) overlay_->Draw(list);
             const bool last = options_.frameLimit && stats_.frames + 1 >= options_.frameLimit;
@@ -202,6 +251,7 @@ public:
             const auto beforePresent = Clock::now();
             stats_.cpuWorkMs = std::chrono::duration<double, std::milli>(beforePresent - start).count();
             stats_.fenceWaitMs = renderer_.FenceWaitMs();
+            if(stats_.frames>=70){cpuTotal+=stats_.cpuWorkMs;cpuActiveTotal+=std::max(0.0,stats_.cpuWorkMs-renderer_.FenceWaitMs());gpuTotal+=renderer_.GpuFrameMs();++measuredFrames;}
             visible = renderer_.EndFrame(settings_.vsync, capture);
             ++stats_.frames;
             input_.pressed.fill(false);
@@ -212,11 +262,18 @@ public:
                 CheckWin32(SetWindowTextW(window_, title.c_str()), "Update diagnostic title");
                 titleTime = 0;
             }
-            if (capture) renderer_.SaveCapture(options_.capture, options_.smoke, options_.assetCheck, !options_.assetUpdate.empty());
+            if (capture) {
+                const auto check = options_.animationCheck?AssetCaptureCheck::Corners:options_.vfxDepthCheck?AssetCaptureCheck::Midtone:options_.vfxCheck?AssetCaptureCheck::VfxAlpha:options_.colorCheck ? AssetCaptureCheck::Midtone :
+                    !options_.assetCheck ? AssetCaptureCheck::None :
+                    options_.assetUpdate.empty() ? AssetCaptureCheck::Corners : AssetCaptureCheck::UpdatedCorners;
+                renderer_.SaveCapture(options_.capture,options_.smoke,check);
+            }
             if (last) SendMessageW(window_, WM_CLOSE, 0, 0);
         }
         if (windowError_) std::rethrow_exception(windowError_);
         renderer_.WaitIdle();
+        if(options_.integrationSmoke && (!smokeResized_||!smokeRestoredSize_||!sawMinimize_||!sawRestore_||renderer_.Vfx()->Instances()!=16))throw std::runtime_error("Integration lifecycle/instances failed");
+        if(measuredFrames)log_.Write(std::format("PROFILE frames={} CPU record incl fence wait avg={:.3f} ms CPU excl fence wait avg={:.3f} ms GPU render avg={:.3f} ms vsync={} adapter={}",measuredFrames,cpuTotal/static_cast<double>(measuredFrames),cpuActiveTotal/static_cast<double>(measuredFrames),gpuTotal/static_cast<double>(measuredFrames),settings_.vsync,renderer_.AdapterName()));
         if (overlay_) overlay_->Shutdown();
         overlayReady_ = false;
         // Include destruction-time backend messages in the result.
@@ -225,6 +282,7 @@ public:
             throw std::runtime_error("Smoke test lifecycle assertions failed");
         if (options_.assetSmoke && (!smokeResized_ || !smokeRestoredSize_ || !sawMinimize_ || !sawRestore_ || stats_.frames != 32 || renderer_.ModelGeneration(0) != 5))
             throw std::runtime_error("Asset smoke lifecycle/reload assertions failed");
+        renderer_.ReleasePreviewAssets();
         log_.Write(std::format("Shutdown: frames={}, Debug Layer errors={}, resize/minimize/restore={}/{}/{}",
             stats_.frames, renderer_.DiagnosticErrors(), smokeResized_, sawMinimize_, sawRestore_));
         if (renderer_.DiagnosticErrors()) return 1;
@@ -269,7 +327,7 @@ private:
             return 0;
         }
         case WM_TIMER:
-            if (w == 1 && (options_.smoke || options_.assetSmoke)) { KillTimer(window, 1); ShowWindow(window, SW_RESTORE); log_.Write("Smoke timer restored window"); }
+            if (w == 1 && (options_.smoke || options_.assetSmoke || options_.integrationSmoke)) { KillTimer(window, 1); ShowWindow(window, SW_RESTORE); log_.Write("Smoke timer restored window"); }
             return 0;
         case WM_KILLFOCUS:
             input_.down.fill(false); input_.pressed.fill(false); input_.leftMouse = false;
@@ -329,7 +387,7 @@ int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay) {
                 std::format(L"{}-{}.log", name, GetCurrentProcessId());
         }
         log = std::make_unique<Log>(options.log);
-        log->Write("Starting " + Utf8(name) + " | C++20 | Phase 0B");
+        log->Write("Starting " + Utf8(name) + " | C++20 | Phase 0C");
         Application application(instance, name, overlay, *log, std::move(options));
         return application.Run();
     } catch (const std::exception& e) {

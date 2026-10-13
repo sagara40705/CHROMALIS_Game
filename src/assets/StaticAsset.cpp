@@ -70,7 +70,8 @@ void ValidateAsset(const StaticAsset& a) {
     for (const auto& m : a.materials) {
         Require(m.texture < a.textures.size() && m.wrapU <= 2 && m.wrapV <= 2 && m.nearest <= 1 && m.doubleSided <= 1 && m.alphaMask <= 1 && m.unlit <= 1, "Invalid material reference/flags");
         for (float f : m.baseColor) Require(std::isfinite(f) && f >= 0 && f <= 1, "Invalid base color factor");
-        for (float f : {m.cutoff, m.metallic, m.roughness}) Require(std::isfinite(f) && f >= 0 && f <= 1, "Invalid material scalar");
+        Require(std::isfinite(m.cutoff) && m.cutoff >= 0, "Invalid alpha cutoff");
+        for (float f : {m.metallic, m.roughness}) Require(std::isfinite(f) && f >= 0 && f <= 1, "Invalid metallic/roughness scalar");
     }
     uint64_t total = 0;
     for (const auto& t : a.textures) {
@@ -80,7 +81,10 @@ void ValidateAsset(const StaticAsset& a) {
     }
 }
 StaticAsset LoadStaticAsset(const std::filesystem::path& path) {
-    const auto bytes = ReadAssetBytes(path); Reader r{bytes};
+    return DecodeStaticAsset(ReadAssetBytes(path));
+}
+StaticAsset DecodeStaticAsset(std::span<const uint8_t> bytes) {
+    Reader r{bytes};
     Require(r.U32() == 0x4d524843 && r.U32() == 0x485345, "Not a CHRMESH cooked asset");
     Require(r.U32() == StaticAsset::FormatVersion, "Unsupported cooked asset version; recook with matching Cooker");
     StaticAsset a; a.id = r.String();
@@ -104,7 +108,7 @@ StaticAsset LoadStaticAsset(const std::filesystem::path& path) {
     Require(r.cursor == bytes.size(), "Unexpected trailing cooked data");
     ValidateAsset(a); return a;
 }
-void SaveStaticAsset(const StaticAsset& a, const std::filesystem::path& path) {
+std::vector<uint8_t> EncodeStaticAsset(const StaticAsset& a) {
     ValidateAsset(a); Writer w; w.U32(0x4d524843); w.U32(0x485345); w.U32(StaticAsset::FormatVersion); w.String(a.id);
     w.U32(static_cast<uint32_t>(a.dependencies.size())); for (const auto& d : a.dependencies) { w.String(d.relativePath); w.String(d.sha256); }
     w.U32(static_cast<uint32_t>(a.vertices.size()));
@@ -120,10 +124,14 @@ void SaveStaticAsset(const StaticAsset& a, const std::filesystem::path& path) {
     w.U32(static_cast<uint32_t>(a.textures.size()));
     for (const auto& t : a.textures) { w.U32(t.width); w.U32(t.height); w.U32(static_cast<uint32_t>(t.rgba.size())); w.bytes.insert(w.bytes.end(), t.rgba.begin(), t.rgba.end()); }
     Require(w.bytes.size() <= MaxFile, "Cooked asset exceeds 512 MiB");
+    return std::move(w.bytes);
+}
+void SaveStaticAsset(const StaticAsset& a, const std::filesystem::path& path) {
+    const auto bytes = EncodeStaticAsset(a);
     if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
     auto temp = path; temp += L".tmp-" + std::to_wstring(GetCurrentProcessId());
     try {
-        { std::ofstream out(temp, std::ios::binary | std::ios::trunc); out.write(reinterpret_cast<const char*>(w.bytes.data()), static_cast<std::streamsize>(w.bytes.size())); out.flush(); Require(bool(out), "Cannot write cooked candidate"); }
+        { std::ofstream out(temp, std::ios::binary | std::ios::trunc); out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); out.flush(); Require(bool(out), "Cannot write cooked candidate"); }
         (void)LoadStaticAsset(temp);
         Require(MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0, "Cannot publish cooked candidate; previous file retained");
     } catch (...) { std::error_code ignored; std::filesystem::remove(temp, ignored); throw; }

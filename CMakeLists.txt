@@ -35,12 +35,29 @@ target_compile_definitions(ChromalisRuntime PUBLIC UNICODE _UNICODE NOMINMAX WIN
 target_compile_options(ChromalisRuntime PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
 target_link_libraries(ChromalisRuntime PUBLIC d3d12 dxgi dxguid user32 shell32)
 
-add_library(ChromalisAssets STATIC src/assets/StaticAsset.cpp)
+add_library(ChromalisAssets STATIC src/assets/StaticAsset.cpp src/assets/SkeletalAsset.cpp)
 target_include_directories(ChromalisAssets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(ChromalisAssets PUBLIC cxx_std_20)
 target_compile_definitions(ChromalisAssets PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(ChromalisAssets PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
 target_link_libraries(ChromalisRuntime PUBLIC ChromalisAssets)
+include(cmake/Animation.cmake)
+include(cmake/Vfx.cmake)
+include(cmake/RuntimeLicenses.cmake)
+set(CHROMALIS_RUNTIME_LICENSE_DIR "${CHROMALIS_RUNTIME_LICENSE_DIR}" CACHE INTERNAL "Generated runtime notices")
+target_sources(ChromalisRuntime PRIVATE src/runtime/VfxPlayer.cpp)
+target_link_libraries(ChromalisRuntime PRIVATE EffekseerRendererDX12)
+add_library(ChromalisAnimation STATIC src/animation/AnimationPlayer.cpp)
+target_include_directories(ChromalisAnimation PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(ChromalisAnimation PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
+target_compile_definitions(ChromalisAnimation PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(ChromalisAnimation PUBLIC ChromalisAssets PRIVATE ozz_animation_offline)
+target_link_libraries(ChromalisRuntime PUBLIC ChromalisAnimation)
+add_custom_command(OUTPUT "${SHADER_DIR}/Skin_vs.h"
+  COMMAND "${DXC_EXECUTABLE}" -T vs_6_0 -E vs_main -D SKINNED -WX -Ges -Zpr
+    -Fh "${SHADER_DIR}/Skin_vs.h" -Vn Skin_vs "${CMAKE_CURRENT_SOURCE_DIR}/shaders/Mesh.hlsl"
+  DEPENDS shaders/Mesh.hlsl VERBATIM)
+target_sources(ChromalisRuntime PRIVATE "${SHADER_DIR}/Skin_vs.h")
 foreach(STAGE IN ITEMS vs ps)
   add_custom_command(OUTPUT "${SHADER_DIR}/Mesh_${STAGE}.h"
     COMMAND "${DXC_EXECUTABLE}" -T ${STAGE}_6_0 -E ${STAGE}_main -WX -Ges -Zpr
@@ -49,7 +66,7 @@ foreach(STAGE IN ITEMS vs ps)
   target_sources(ChromalisRuntime PRIVATE "${SHADER_DIR}/Mesh_${STAGE}.h")
 endforeach()
 
-option(CHROMALIS_BUILD_COOKER "Build offline glTF/GLB static model cooker" ON)
+option(CHROMALIS_BUILD_COOKER "Build offline glTF/GLB model cooker" ON)
 if(CHROMALIS_BUILD_COOKER)
   include(FetchContent)
   set(CHROMALIS_CGLTF_ARCHIVE "https://github.com/jkuhlmann/cgltf/archive/refs/tags/v1.15.tar.gz" CACHE STRING "Pinned cgltf archive URL or local path")
@@ -72,6 +89,7 @@ if(CHROMALIS_BUILD_COOKER)
 endif()
 
 add_executable(ChromalisGame WIN32 Main.cpp app.manifest)
+chromalis_copy_runtime_licenses(ChromalisGame)
 target_link_libraries(ChromalisGame PRIVATE ChromalisRuntime)
 target_compile_options(ChromalisGame PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
 set_target_properties(ChromalisGame PROPERTIES
@@ -80,18 +98,53 @@ set_target_properties(ChromalisGame PROPERTIES
 
 if(BUILD_TESTING)
   if(CHROMALIS_BUILD_COOKER)
+    add_executable(ChromalisAnimationTests src/tests/AnimationTests.cpp)
+    target_link_libraries(ChromalisAnimationTests PRIVATE ChromalisCook ChromalisAnimation)
+    target_compile_options(ChromalisAnimationTests PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
+    add_test(NAME animation.cpu COMMAND ChromalisAnimationTests "${CMAKE_CURRENT_SOURCE_DIR}/assets/RiggedFigure/RiggedFigure.glb" "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/figure.cskin")
+    set_tests_properties(animation.cpu PROPERTIES FIXTURES_SETUP animated-assets TIMEOUT 30)
+    add_test(NAME animation.warp COMMAND ChromalisGame --warp --require-debug --animation "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/figure.cskin" --frames 60 --capture "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/figure.bmp")
+    set_tests_properties(animation.warp PROPERTIES FIXTURES_REQUIRED animated-assets TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME animation.warp.bind COMMAND ChromalisGame --warp --require-debug --bind-pose
+      --animation "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/figure.cskin" --frames 4 --capture "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/bind.bmp")
+    set_tests_properties(animation.warp.bind PROPERTIES FIXTURES_REQUIRED animated-assets TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME animation.warp.pixels COMMAND ChromalisGame --warp --require-debug --animation-check
+      --animation "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/skinning.cskin" --capture "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/skinning.bmp")
+    set_tests_properties(animation.warp.pixels PROPERTIES FIXTURES_REQUIRED animated-assets TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME vfx.warp.pixels COMMAND ChromalisGame --warp --require-debug --vfx-check
+      --vfx "${CMAKE_CURRENT_SOURCE_DIR}/assets/Vfx/AlphaProbe.efkefc" --capture "${CMAKE_CURRENT_BINARY_DIR}/vfx-alpha.bmp")
+    set_tests_properties(vfx.warp.pixels PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME vfx.warp.changed-retained COMMAND ChromalisGame --warp --require-debug --vfx-check
+      --vfx "${CMAKE_CURRENT_SOURCE_DIR}/assets/Vfx/Pulse.efkefc" --vfx-update "${CMAKE_CURRENT_SOURCE_DIR}/assets/Vfx/AlphaProbe.efkefc"
+      --capture "${CMAKE_CURRENT_BINARY_DIR}/vfx-changed-retained.bmp")
+    set_tests_properties(vfx.warp.changed-retained PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME vfx.warp.depth COMMAND ChromalisGame --warp --require-debug --vfx-depth-check
+      --asset "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/midtone.cmesh" --vfx "${CMAKE_CURRENT_SOURCE_DIR}/assets/Vfx/AlphaProbe.efkefc"
+      --capture "${CMAKE_CURRENT_BINARY_DIR}/vfx-depth.bmp")
+    set_tests_properties(vfx.warp.depth PROPERTIES FIXTURES_REQUIRED cooked-assets TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME integration.warp COMMAND ChromalisGame --warp --require-debug --integration-smoke
+      --animation "${CMAKE_CURRENT_BINARY_DIR}/animation-tests/figure.cskin" --asset "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/cube.cmesh"
+      --vfx "${CMAKE_CURRENT_SOURCE_DIR}/assets/Vfx/Pulse.efkefc" --capture "${CMAKE_CURRENT_BINARY_DIR}/integration.bmp")
+    set_tests_properties(integration.warp PROPERTIES FIXTURES_REQUIRED "animated-assets;cooked-assets" TIMEOUT 60 RUN_SERIAL TRUE)
     add_executable(ChromalisAssetTests src/tests/AssetTests.cpp)
     target_link_libraries(ChromalisAssetTests PRIVATE ChromalisCook windowscodecs ole32)
     target_compile_definitions(ChromalisAssetTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(ChromalisAssetTests PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
     add_test(NAME assets.cpu COMMAND ChromalisAssetTests "${CMAKE_CURRENT_SOURCE_DIR}/assets/Cube/Cube.gltf" "${CMAKE_CURRENT_BINARY_DIR}/asset-tests")
     set_tests_properties(assets.cpu PROPERTIES FIXTURES_SETUP cooked-assets TIMEOUT 30)
+    add_test(NAME assets.cooker.paths COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/CookerCliTests.ps1" -Cooker "$<TARGET_FILE:ChromalisAssetCooker>"
+      -Source "${CMAKE_CURRENT_SOURCE_DIR}/assets/Cube" -Root "${CMAKE_CURRENT_BINARY_DIR}/report-tests")
+    set_tests_properties(assets.cooker.paths PROPERTIES TIMEOUT 60)
     add_test(NAME assets.warp.reload COMMAND ChromalisGame --warp --require-debug --asset-smoke
       --asset "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/cube.cmesh" --capture "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/reload.bmp")
     set_tests_properties(assets.warp.reload PROPERTIES FIXTURES_REQUIRED cooked-assets TIMEOUT 60 RUN_SERIAL TRUE)
     add_test(NAME assets.warp.pixels COMMAND ChromalisGame --warp --require-debug --asset-check
       --asset "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/scene.cmesh" --capture "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/pixels.bmp")
     set_tests_properties(assets.warp.pixels PROPERTIES FIXTURES_REQUIRED cooked-assets TIMEOUT 60 RUN_SERIAL TRUE)
+    add_test(NAME assets.warp.srgb COMMAND ChromalisGame --warp --require-debug --color-check
+      --asset "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/midtone.cmesh" --capture "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/midtone.bmp")
+    set_tests_properties(assets.warp.srgb PROPERTIES FIXTURES_REQUIRED cooked-assets TIMEOUT 60 RUN_SERIAL TRUE)
     add_test(NAME assets.warp.changed-retained COMMAND ChromalisGame --warp --require-debug --asset-check
       --asset "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/scene.cmesh" --asset-update "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/changed.cmesh"
       --capture "${CMAKE_CURRENT_BINARY_DIR}/asset-tests/changed-retained.bmp")

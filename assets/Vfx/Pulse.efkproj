@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<EffekseerProject>
+  <Root><Name>Root</Name><Children><Node>
+    <Name>Pulse</Name>
+    <CommonValues><MaxGeneration><Value>1</Value></MaxGeneration><Life><Center>180</Center><Max>180</Max><Min>180</Min></Life></CommonValues>
+    <ScalingValues><Type>0</Type><Fixed><Scale><X>4</X><Y>4</Y><Z>4</Z></Scale></Fixed></ScalingValues>
+    <RendererCommonValues><ColorTexture>Pulse.png</ColorTexture><AlphaBlend>2</AlphaBlend><Filter>1</Filter><Wrap>1</Wrap><ZTest>True</ZTest><ZWrite>False</ZWrite><FadeInType>1</FadeInType><FadeIn><Frame>8</Frame></FadeIn><FadeOutType>1</FadeOutType><FadeOut><Frame>60</Frame></FadeOut></RendererCommonValues>
+    <DrawingValues><Type>2</Type><Sprite><Billboard>0</Billboard><ColorAll>0</ColorAll><ColorAll_Fixed><R>255</R><G>255</G><B>255</B><A>255</A></ColorAll_Fixed></Sprite></DrawingValues>
+    <Children/>
+  </Node></Children></Root>
+  <ToolVersion>1.53</ToolVersion><Version>3</Version><StartFrame>0</StartFrame><EndFrame>180</EndFrame><IsLoop>True</IsLoop>
+</EffekseerProject>

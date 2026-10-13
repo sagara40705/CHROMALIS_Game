@@ -1,6 +1,8 @@
 #pragma once
 #include "runtime/Diagnostics.h"
 #include "assets/StaticAsset.h"
+#include "animation/AnimationPlayer.h"
+#include "runtime/VfxPlayer.h"
 #include <DirectXMath.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -23,13 +25,17 @@ struct RenderSettings {
     bool showModels = true, unlit = false;
     float cameraYaw = 0.35f, cameraPitch = 0.25f, cameraDistance = 7;
     std::array<ModelPose, 2> models{ModelPose{{-1.25f,0,0},0,0.7f}, ModelPose{{1.25f,0,0.6f},0.5f,0.7f}};
+    ModelPose animated{{0,-1,0},0,1};
+    VfxSettings vfx;
 };
 struct RendererOptions { bool warp = false, debug = false, gpuValidation = false; };
+enum class AssetCaptureCheck { None, Corners, UpdatedCorners, Midtone, VfxAlpha };
 
 class Renderer final {
 public:
     static constexpr UINT FrameCount = 2;
     static constexpr DXGI_FORMAT OutputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static constexpr DXGI_FORMAT SceneFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
     explicit Renderer(Log& log) : log_(log) {}
     ~Renderer();
     Renderer(const Renderer&) = delete;
@@ -39,10 +45,16 @@ public:
     ID3D12GraphicsCommandList* BeginFrame(const RenderSettings& settings);
     bool EndFrame(bool vsync, bool capture);
     bool TestVisible();
-    void SaveCapture(const std::filesystem::path& path, bool verifyTriangle, bool verifyAsset = false, bool updatedAsset = false);
+    void SaveCapture(const std::filesystem::path& path, bool verifyTriangle, AssetCaptureCheck assetCheck = AssetCaptureCheck::None);
     void WaitIdle();
+    void ReleasePreviewAssets();
     void DrainDiagnostics();
     bool ReloadModel(size_t slot, const std::filesystem::path& path);
+    bool ReloadAnimation(const std::filesystem::path& path);
+    AnimationPlayer* Animation() { return animation_.get(); }
+    bool ReloadVfx(const std::filesystem::path& path);
+    VfxPlayer* Vfx() { return vfx_.get(); }
+    void UpdatePresentation(float seconds,const RenderSettings& settings);
     const std::string& AssetStatus() const { return assetStatus_; }
     uint64_t ModelGeneration(size_t slot) const { return modelGenerations_.at(slot); }
     ID3D12Device* Device() const { return device_.Get(); }
@@ -54,11 +66,15 @@ public:
     UINT Height() const { return height_; }
     size_t DiagnosticErrors() const { return diagnosticErrors_; }
     double FenceWaitMs() const { return fenceWaitMs_; }
+    double GpuFrameMs() const { return gpuFrameMs_; }
 private:
     struct Frame {
         ComPtr<ID3D12CommandAllocator> allocator;
         ComPtr<ID3D12Resource> constants;
         std::byte* mapped = nullptr;
+        ComPtr<ID3D12Resource> bones;
+        std::byte* bonesMapped = nullptr;
+        ComPtr<ID3D12Resource> timestamps;
         UINT64 fence = 0;
     };
     void CreateTargets();
@@ -92,10 +108,15 @@ private:
     std::string adapterName_;
     size_t diagnosticErrors_ = 0;
     double fenceWaitMs_ = 0;
+    double gpuFrameMs_ = 0;
+    UINT64 timestampFrequency_=0;
+    ComPtr<ID3D12QueryHeap> timestampHeap_;
     std::array<float, 4> lastClear_{};
     struct GpuModel {
         std::string id;
         ComPtr<ID3D12Resource> vertex, index;
+        ComPtr<ID3D12Resource> skin;
+        D3D12_VERTEX_BUFFER_VIEW skinView{};
         std::vector<ComPtr<ID3D12Resource>> textures;
         ComPtr<ID3D12DescriptorHeap> srv, samplers;
         D3D12_VERTEX_BUFFER_VIEW vb{};
@@ -104,11 +125,16 @@ private:
         std::vector<MeshMaterial> materials;
     };
     std::array<std::unique_ptr<GpuModel>, 2> models_;
+    std::unique_ptr<GpuModel> animatedModel_;
+    std::unique_ptr<AnimationPlayer> animation_;
+    std::unique_ptr<VfxPlayer> vfx_;
+    std::unique_ptr<GpuModel> UploadModel(const StaticAsset& asset, const std::vector<SkinVertex>* skin, bool& submitted);
     std::array<uint64_t, 2> modelGenerations_{};
     std::string assetStatus_ = "No cooked models loaded";
     ComPtr<ID3D12Resource> depth_;
     ComPtr<ID3D12DescriptorHeap> dsv_;
     ComPtr<ID3D12RootSignature> meshRoot_;
     std::array<ComPtr<ID3D12PipelineState>, 2> meshPso_;
+    std::array<ComPtr<ID3D12PipelineState>, 2> skinPso_;
 };
 }

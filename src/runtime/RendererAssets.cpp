@@ -1,11 +1,31 @@
 #include "runtime/Renderer.h"
 #include "Mesh_vs.h"
 #include "Mesh_ps.h"
+#include "Skin_vs.h"
 #include <cstring>
 #include <format>
 #include <stdexcept>
 
 namespace chromalis {
+bool Renderer::ReloadVfx(const std::filesystem::path& path) {
+    WaitIdle();
+    if(!vfx_)vfx_=std::make_unique<VfxPlayer>(device_.Get(),queue_.Get(),SceneFormat);
+    const bool ok=vfx_->Reload(path);log_.Write(vfx_->Status());return ok;
+}
+void Renderer::UpdatePresentation(float seconds,const RenderSettings& settings) {
+    if(animation_)animation_->Update(seconds);
+    if(vfx_) {
+        auto v=settings.vfx;
+        if(v.followSocket && animation_) {
+            using namespace DirectX;const auto& pose=settings.animated;XMFLOAT4X4 world;
+            XMStoreFloat4x4(&world,XMMatrixScaling(pose.scale,pose.scale,pose.scale)*XMMatrixRotationY(pose.yaw)*XMMatrixTranslation(pose.position[0],pose.position[1],pose.position[2]));
+            const auto joint=std::clamp(v.joint,0,static_cast<int>(animation_->Asset().joints.size())-1);
+            const auto socket=animation_->Socket(static_cast<size_t>(joint),world);
+            v.position[0]+=socket.x;v.position[1]+=socket.y;v.position[2]+=socket.z;
+        }
+        vfx_->Update(seconds,v);
+    }
+}
 namespace {
 D3D12_HEAP_PROPERTIES HeapType(D3D12_HEAP_TYPE type) {
     D3D12_HEAP_PROPERTIES h{}; h.Type = type; h.CreationNodeMask = h.VisibleNodeMask = 1; return h;
@@ -36,13 +56,15 @@ void Renderer::CreateDepth() {
 void Renderer::CreateMeshPipeline() {
     D3D12_DESCRIPTOR_RANGE srv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0};
     D3D12_DESCRIPTOR_RANGE sampler{D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,1,0,0,0};
-    D3D12_ROOT_PARAMETER parameters[3]{};
+    D3D12_ROOT_PARAMETER parameters[4]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     parameters[0].Constants = {0,0,40}; parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     parameters[1].ParameterType = parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     parameters[1].DescriptorTable = {1,&srv}; parameters[2].DescriptorTable = {1,&sampler};
     parameters[1].ShaderVisibility = parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-    D3D12_ROOT_SIGNATURE_DESC root{}; root.NumParameters = 3; root.pParameters = parameters;
+    parameters[3].ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;
+    parameters[3].Descriptor={1,0};parameters[3].ShaderVisibility=D3D12_SHADER_VISIBILITY_VERTEX;
+    D3D12_ROOT_SIGNATURE_DESC root{}; root.NumParameters = 4; root.pParameters = parameters;
     root.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     ComPtr<ID3DBlob> blob, errors;
     auto result = D3D12SerializeRootSignature(&root,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&errors);
@@ -52,7 +74,9 @@ void Renderer::CreateMeshPipeline() {
     const D3D12_INPUT_ELEMENT_DESC input[]{
         {"POSITION",0,DXGI_FORMAT_R32G32B32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"NORMAL",0,DXGI_FORMAT_R32G32B32_FLOAT,0,12,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
-        {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0}};
+        {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+        {"BLENDINDICES",0,DXGI_FORMAT_R32G32B32A32_UINT,1,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+        {"BLENDWEIGHT",0,DXGI_FORMAT_R32G32B32A32_FLOAT,1,16,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0}};
     D3D12_GRAPHICS_PIPELINE_STATE_DESC p{}; p.pRootSignature = meshRoot_.Get();
     p.VS = {Mesh_vs,sizeof(Mesh_vs)}; p.PS = {Mesh_ps,sizeof(Mesh_ps)}; p.InputLayout = {input,3};
     auto& blend = p.BlendState.RenderTarget[0];
@@ -67,17 +91,39 @@ void Renderer::CreateMeshPipeline() {
     p.DepthStencilState.DepthEnable = TRUE; p.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     p.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
     p.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    p.NumRenderTargets = 1; p.RTVFormats[0] = OutputFormat; p.DSVFormat = DXGI_FORMAT_D32_FLOAT; p.SampleDesc.Count = 1;
+    p.NumRenderTargets = 1; p.RTVFormats[0] = SceneFormat; p.DSVFormat = DXGI_FORMAT_D32_FLOAT; p.SampleDesc.Count = 1;
     for (size_t i = 0; i < meshPso_.size(); ++i) {
         p.RasterizerState.CullMode = i == 0 ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
         Check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&meshPso_[i])),"Create mesh pipeline");
     }
+    p.VS={Skin_vs,sizeof(Skin_vs)};p.InputLayout={input,5};
+    for(size_t i=0;i<skinPso_.size();++i){p.RasterizerState.CullMode=i==0?D3D12_CULL_MODE_BACK:D3D12_CULL_MODE_NONE;Check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&skinPso_[i])),"Create skin pipeline");}
 }
 bool Renderer::ReloadModel(size_t slot, const std::filesystem::path& path) {
     bool submitted = false;
     try {
         if (slot >= models_.size()) throw std::runtime_error("Model preview slot out of range");
         const auto asset = LoadStaticAsset(path);
+        auto candidate=UploadModel(asset,nullptr,submitted);
+        models_[slot].swap(candidate); ++modelGenerations_[slot];
+        assetStatus_ = std::format("Loaded {} into slot {} (generation {})",asset.id,slot,modelGenerations_[slot]);
+        log_.Write(assetStatus_); return true;
+    } catch (const std::exception& e) {
+        assetStatus_ = std::string("Reload failed; previous model retained: ") + e.what(); log_.Write(assetStatus_);
+        if (submitted || FAILED(device_->GetDeviceRemovedReason())) throw;
+        return false;
+    }
+}
+bool Renderer::ReloadAnimation(const std::filesystem::path& path) {
+    bool submitted=false;
+    try {
+        auto player=std::make_unique<AnimationPlayer>(LoadSkeletalAsset(path));
+        auto candidate=UploadModel(player->Asset().mesh,&player->Asset().skin,submitted);
+        animation_.swap(player);animatedModel_.swap(candidate);
+        assetStatus_="Loaded skeletal asset: "+animation_->Asset().mesh.id;log_.Write(assetStatus_);return true;
+    }catch(const std::exception& e){assetStatus_=std::string("Animation reload failed; retained: ")+e.what();log_.Write(assetStatus_);if(submitted || FAILED(device_->GetDeviceRemovedReason()))throw;return false;}
+}
+std::unique_ptr<Renderer::GpuModel> Renderer::UploadModel(const StaticAsset& asset,const std::vector<SkinVertex>* skin,bool& submitted) {
         auto candidate = std::make_unique<GpuModel>();
         candidate->id = asset.id; candidate->parts = asset.parts; candidate->materials = asset.materials;
         ComPtr<ID3D12CommandAllocator> allocator;
@@ -104,6 +150,11 @@ bool Renderer::ReloadModel(size_t slot, const std::filesystem::path& path) {
         uploadBuffer(asset.indices.data(),ibSize,candidate->index,D3D12_RESOURCE_STATE_INDEX_BUFFER);
         candidate->vb = {candidate->vertex->GetGPUVirtualAddress(),static_cast<UINT>(vbSize),sizeof(MeshVertex)};
         candidate->ib = {candidate->index->GetGPUVirtualAddress(),static_cast<UINT>(ibSize),DXGI_FORMAT_R32_UINT};
+        if(skin) {
+            static_assert(sizeof(SkinVertex)==32);
+            uploadBuffer(skin->data(),skin->size()*sizeof(SkinVertex),candidate->skin,D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            candidate->skinView={candidate->skin->GetGPUVirtualAddress(),static_cast<UINT>(skin->size()*sizeof(SkinVertex)),sizeof(SkinVertex)};
+        }
         D3D12_DESCRIPTOR_HEAP_DESC heap{}; heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; heap.NumDescriptors = static_cast<UINT>(asset.textures.size());
         Check(device_->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&candidate->srv)),"Create asset texture heap");
@@ -147,15 +198,7 @@ bool Renderer::ReloadModel(size_t slot, const std::filesystem::path& path) {
         ID3D12CommandList* lists[]{commands.Get()}; queue_->ExecuteCommandLists(1,lists); submitted = true;
         // 0B reload is synchronous. This drains both old draws and new uploads before exchanging ownership.
         WaitIdle();
-        models_[slot].swap(candidate); ++modelGenerations_[slot];
-        assetStatus_ = std::format("Loaded {} into slot {} (generation {})",asset.id,slot,modelGenerations_[slot]);
-        log_.Write(assetStatus_); return true;
-    } catch (const std::exception& e) {
-        assetStatus_ = std::string("Reload failed; previous model retained: ") + e.what(); log_.Write(assetStatus_);
-        // Fence/device failure cannot be treated as an ordinary recoverable asset error.
-        if (submitted || FAILED(device_->GetDeviceRemovedReason())) throw;
-        return false;
-    }
+        return candidate;
 }
 void Renderer::DrawModels(const RenderSettings& settings) {
     using namespace DirectX;
@@ -167,19 +210,29 @@ void Renderer::DrawModels(const RenderSettings& settings) {
     list_->SetGraphicsRootSignature(meshRoot_.Get());
     const auto srvStride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     const auto samplerStride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
-    for (size_t i = 0; i < models_.size(); ++i) {
-        if (!models_[i]) continue;
-        const auto& m = *models_[i]; const auto& pose = settings.models[i];
+    for (size_t i = 0; i < models_.size()+1; ++i) {
+        const bool animated=i==models_.size();
+        const auto* model=animated?animatedModel_.get():models_[i].get();
+        if (!model) continue;
+        const auto& m = *model; const auto& pose = animated?settings.animated:settings.models[i];
         const auto world = XMMatrixScaling(pose.scale,pose.scale,pose.scale)*XMMatrixRotationY(pose.yaw)*XMMatrixTranslation(pose.position[0],pose.position[1],pose.position[2]);
         struct Constants { XMFLOAT4X4 wvp, world; std::array<float,4> color, options; } constants;
         static_assert(sizeof(Constants) == 160);
         XMStoreFloat4x4(&constants.wvp,world*view*projection); XMStoreFloat4x4(&constants.world,world);
         ID3D12DescriptorHeap* heaps[]{m.srv.Get(),m.samplers.Get()}; list_->SetDescriptorHeaps(2,heaps);
         list_->IASetVertexBuffers(0,1,&m.vb); list_->IASetIndexBuffer(&m.ib);
+        if(animated) {
+            auto& frame=frames_[frameIndex_];
+            // BeginFrameでこのフレームのFence完了を待ってから上書きする。
+            std::memcpy(frame.bonesMapped,animation_->Palette().data(),animation_->Palette().size()*64);
+            std::memcpy(frame.bonesMapped+256*64,animation_->Normals().data(),animation_->Normals().size()*64);
+            list_->SetGraphicsRootConstantBufferView(3,frame.bones->GetGPUVirtualAddress());
+            list_->IASetVertexBuffers(1,1,&m.skinView);
+        }
         for (const auto& part : m.parts) {
             const auto& material = m.materials[part.material];
             constants.color = material.baseColor; constants.options = {material.cutoff,static_cast<float>(material.alphaMask),(settings.unlit || material.unlit)?1.0f:0.0f,0};
-            list_->SetPipelineState(meshPso_[material.doubleSided].Get());
+            list_->SetPipelineState(animated?skinPso_[material.doubleSided].Get():meshPso_[material.doubleSided].Get());
             list_->SetGraphicsRoot32BitConstants(0,40,&constants,0);
             auto texture = m.srv->GetGPUDescriptorHandleForHeapStart(); texture.ptr += UINT64(material.texture)*srvStride;
             auto sampler = m.samplers->GetGPUDescriptorHandleForHeapStart(); sampler.ptr += UINT64(part.material)*samplerStride;

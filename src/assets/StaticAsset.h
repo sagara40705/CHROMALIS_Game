@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <span>
 
 namespace chromalis {
 // CPU-only cooked contract; no glTF, ImGui or GPU object identifiers.
@@ -30,4 +31,6 @@ std::vector<uint8_t> ReadAssetBytes(const std::filesystem::path& path);
 void ValidateAsset(const StaticAsset& asset);
 StaticAsset LoadStaticAsset(const std::filesystem::path& path);
 void SaveStaticAsset(const StaticAsset& asset, const std::filesystem::path& path);
+std::vector<uint8_t> EncodeStaticAsset(const StaticAsset& asset);
+StaticAsset DecodeStaticAsset(std::span<const uint8_t> bytes);
 }
