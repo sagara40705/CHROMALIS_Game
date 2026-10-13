@@ -60,6 +60,16 @@ void ValidateAsset(const StaticAsset& a) {
         const float n = v.normal[0]*v.normal[0] + v.normal[1]*v.normal[1] + v.normal[2]*v.normal[2];
         Require(n > 0.9f && n < 1.1f, "Vertex normal must be normalized");
     }
+    Require(a.tangents.empty() || a.tangents.size() == a.vertices.size(), "Tangent count mismatch");
+    for (size_t i = 0; i < a.tangents.size(); ++i) {
+        const auto& t = a.tangents[i];
+        for (float f : t) Require(std::isfinite(f), "Nonfinite tangent");
+        const float length = t[0]*t[0]+t[1]*t[1]+t[2]*t[2];
+        Require(length > 0.9f && length < 1.1f && (t[3] == 0 || std::abs(t[3]) == 1), "Invalid tangent basis");
+        const auto& normal = a.vertices[i].normal;
+        const float dot = t[0]*normal[0]+t[1]*normal[1]+t[2]*normal[2];
+        Require(t[3] == 0 || length - dot*dot > 1e-6f, "Tangent parallel to normal");
+    }
     for (auto i : a.indices) Require(i < a.vertices.size(), "Index out of range");
     uint64_t next = 0;
     for (const auto& p : a.parts) {
@@ -69,6 +79,11 @@ void ValidateAsset(const StaticAsset& a) {
     Require(next == a.indices.size(), "Mesh parts do not cover index buffer");
     for (const auto& m : a.materials) {
         Require(m.texture < a.textures.size() && m.wrapU <= 2 && m.wrapV <= 2 && m.nearest <= 1 && m.doubleSided <= 1 && m.alphaMask <= 1 && m.unlit <= 1, "Invalid material reference/flags");
+        Require(m.pbr <= 1 && m.alphaBlend <= 1 && !(m.alphaBlend && m.alphaMask), "Invalid PBR/alpha mode");
+        for (const auto* map : {&m.metallicRoughnessMap, &m.normalMap, &m.occlusionMap, &m.emissiveMap})
+            Require(map->texture < a.textures.size() && map->wrapU <= 2 && map->wrapV <= 2 && map->nearest <= 1, "Invalid material map");
+        for (float f : m.emissive) Require(std::isfinite(f) && f >= 0 && f <= 64, "Invalid emission");
+        Require(std::isfinite(m.normalScale) && m.normalScale >= 0 && m.normalScale <= 16 && std::isfinite(m.occlusionStrength) && m.occlusionStrength >= 0 && m.occlusionStrength <= 1, "Invalid normal/AO strength");
         for (float f : m.baseColor) Require(std::isfinite(f) && f >= 0 && f <= 1, "Invalid base color factor");
         Require(std::isfinite(m.cutoff) && m.cutoff >= 0, "Invalid alpha cutoff");
         for (float f : {m.metallic, m.roughness}) Require(std::isfinite(f) && f >= 0 && f <= 1, "Invalid metallic/roughness scalar");
@@ -86,7 +101,8 @@ StaticAsset LoadStaticAsset(const std::filesystem::path& path) {
 StaticAsset DecodeStaticAsset(std::span<const uint8_t> bytes) {
     Reader r{bytes};
     Require(r.U32() == 0x4d524843 && r.U32() == 0x485345, "Not a CHRMESH cooked asset");
-    Require(r.U32() == StaticAsset::FormatVersion, "Unsupported cooked asset version; recook with matching Cooker");
+    const auto version = r.U32();
+    Require(version == 1 || version == StaticAsset::FormatVersion, "Unsupported cooked asset version; recook with matching Cooker");
     StaticAsset a; a.id = r.String();
     a.dependencies.resize(r.Count(2048, 8));
     for (auto& d : a.dependencies) { d.relativePath = r.String(); d.sha256 = r.String(); }
@@ -99,11 +115,23 @@ StaticAsset DecodeStaticAsset(std::span<const uint8_t> bytes) {
         for (auto& f : m.baseColor) f = r.F32();
         m.texture = r.U32(); m.wrapU = r.U32(); m.wrapV = r.U32(); m.nearest = r.U32();
         m.doubleSided = r.U32(); m.alphaMask = r.U32(); m.unlit = r.U32(); m.cutoff = r.F32(); m.metallic = r.F32(); m.roughness = r.F32();
+        if (version >= 2) {
+            m.pbr = r.U32(); m.alphaBlend = r.U32();
+            for (auto* map : {&m.metallicRoughnessMap, &m.normalMap, &m.occlusionMap, &m.emissiveMap}) {
+                map->texture = r.U32(); map->wrapU = r.U32(); map->wrapV = r.U32(); map->nearest = r.U32();
+            }
+            for (auto& f : m.emissive) f = r.F32();
+            m.normalScale = r.F32(); m.occlusionStrength = r.F32();
+        }
     }
     a.textures.resize(r.Count(256, 12));
     for (auto& t : a.textures) {
         t.width = r.U32(); t.height = r.U32(); const auto size = r.Count(67108864, 1);
         auto raw = r.Take(size); t.rgba.assign(raw.begin(), raw.end());
+    }
+    if (version >= 2) {
+        a.tangents.resize(r.Count(2000000, 16));
+        for (auto& t : a.tangents) for (float& f : t) f = r.F32();
     }
     Require(r.cursor == bytes.size(), "Unexpected trailing cooked data");
     ValidateAsset(a); return a;
@@ -120,9 +148,17 @@ std::vector<uint8_t> EncodeStaticAsset(const StaticAsset& a) {
         for (auto f : m.baseColor) w.F32(f);
         w.U32(m.texture); w.U32(m.wrapU); w.U32(m.wrapV); w.U32(m.nearest); w.U32(m.doubleSided); w.U32(m.alphaMask); w.U32(m.unlit);
         w.F32(m.cutoff); w.F32(m.metallic); w.F32(m.roughness);
+        w.U32(m.pbr); w.U32(m.alphaBlend);
+        for (const auto* map : {&m.metallicRoughnessMap, &m.normalMap, &m.occlusionMap, &m.emissiveMap}) {
+            w.U32(map->texture); w.U32(map->wrapU); w.U32(map->wrapV); w.U32(map->nearest);
+        }
+        for (auto f : m.emissive) w.F32(f);
+        w.F32(m.normalScale); w.F32(m.occlusionStrength);
     }
     w.U32(static_cast<uint32_t>(a.textures.size()));
     for (const auto& t : a.textures) { w.U32(t.width); w.U32(t.height); w.U32(static_cast<uint32_t>(t.rgba.size())); w.bytes.insert(w.bytes.end(), t.rgba.begin(), t.rgba.end()); }
+    w.U32(static_cast<uint32_t>(a.tangents.size()));
+    for (const auto& t : a.tangents) for (float f : t) w.F32(f);
     Require(w.bytes.size() <= MaxFile, "Cooked asset exceeds 512 MiB");
     return std::move(w.bytes);
 }

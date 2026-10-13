@@ -32,12 +32,7 @@ Scene Entityの`asset`はモデルID、`animation.library`は共通ライブラ�
 
 リポジトリルートで、ビルド済みCookerを使う。
 
-```powershell
-& out/build/vs2026/Debug/ChromalisAssetCooker.exe Character.glb out/cooked/Character.cskin --id characters/example
-& out/build/vs2026/Debug/ChromalisAssetCooker.exe CommonAnimations.glb out/cooked/Common.canim --id animations/common
-powershell -NoProfile -ExecutionPolicy Bypass -File Game/assets/Scenes/Prepare.ps1 -Cooker out/build/vs2026/Debug/ChromalisAssetCooker.exe
-& out/build/vs2026/Debug/ChromalisEditor.exe --scene Game/assets/Scenes/SharedAnimation.cscene
-```
+DevelopmentのEditorを`--workspace Content/Workspace.json`で通常起動し、Workspace scenesで対応するMaterials / Shadows / SharedAnimationを選ぶ。アセットは必要に応じて自動変換される。
 
 最初の2行は自分の制作物のパスへ置き換える。後ろの2行は同梱RiggedFigureで再現できる。サンプルの2体は同一モデルと共通ライブラリを使い、個別の再生状態を持つ。本番の異なるキャラクター素材での実績を示すサンプルではない。
 

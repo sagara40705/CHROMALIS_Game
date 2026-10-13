@@ -1,8 +1,10 @@
 #include "cooker/CookStatic.h"
+#include "assets/TextureMip.h"
 #include <windows.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <cmath>
 #include <fstream>
@@ -86,6 +88,58 @@ int wmain(int argc, wchar_t** argv) {
         const auto original = ReadAssetBytes(root/L"scene.cmesh");
         const auto loaded = LoadStaticAsset(root/L"scene.cmesh");
         Require(loaded.textures[1].rgba==asset.textures[1].rgba && loaded.id==asset.id,"Cooked roundtrip failed");
+        // 色空間の違いと奇数寸法の全画素を含むMip生成を検証する。
+        const MeshTexture mipSource{3, 1, {0,0,0,255, 255,255,255,255, 0,0,0,255}};
+        const auto colorMips = BuildMipChain(mipSource, true), dataMips = BuildMipChain(mipSource, false);
+        Require(colorMips.size() == 2 && std::abs(int(colorMips[1].rgba[0])-156) <= 1 && dataMips[1].rgba[0] == 85, "Mip color-space/odd-size regression");
+        const auto materialJson = Replace(json, R"("materials":[{)", R"("materials":[{"alphaMode":"BLEND","normalTexture":{"index":0,"scale":0.7},"occlusionTexture":{"index":0,"strength":0.4},"emissiveTexture":{"index":0},"emissiveFactor":[0.1,0.2,0.3],)");
+        Text(root/L"material.gltf", materialJson);
+        auto mapped = CookStatic(root/L"material.gltf", "tests/material");
+        Require(mapped.materials[1].alphaBlend && mapped.materials[1].pbr && mapped.materials[1].normalMap.texture == 1 && mapped.materials[1].occlusionStrength == 0.4f, "Material import failed");
+        SaveStaticAsset(mapped, root/L"material.cmesh");
+        auto roundtrip = LoadStaticAsset(root/L"material.cmesh");
+        Require(roundtrip.materials[1].normalScale == 0.7f && roundtrip.materials[1].emissive[2] == 0.3f && roundtrip.materials[1].alphaBlend, "Material roundtrip failed");
+        mapped.materials[1].normalMap.texture = 999;
+        Reject([&] { ValidateAsset(mapped); }, "Invalid material map index");
+        mapped = roundtrip; mapped.materials[1].alphaMask = 1;
+        Reject([&] { ValidateAsset(mapped); }, "Conflicting alpha modes");
+        // v1の最小ファイルを独立して組み立て、旧データの読み込みを固定する。
+        std::vector<uint8_t> legacy;
+        const auto number = [&](uint32_t n) { U32(legacy, n); };
+        const auto scalar = [&](float f) { number(std::bit_cast<uint32_t>(f)); };
+        const auto string = [&](const std::string& value) { number(static_cast<uint32_t>(value.size())); legacy.insert(legacy.end(), value.begin(), value.end()); };
+        number(0x4d524843); number(0x485345); number(1); string("tests/legacy"); number(0);
+        number(3);
+        for (size_t i = 0; i < 3; ++i) {
+            for (float f : asset.vertices[i].position) scalar(f);
+            for (float f : asset.vertices[i].normal) scalar(f);
+            for (float f : asset.vertices[i].uv) scalar(f);
+        }
+        number(3); number(0); number(1); number(2);
+        number(1); number(0); number(3); number(0);
+        number(1); for (int i = 0; i < 4; ++i) scalar(1);
+        for (int i = 0; i < 7; ++i) number(0);
+        scalar(0.5f); scalar(1); scalar(1);
+        number(1); number(1); number(1); number(4); legacy.insert(legacy.end(), {255,255,255,255});
+        const auto old = DecodeStaticAsset(legacy);
+        Require(old.materials[0].pbr == 0 && old.tangents.empty() && old.vertices.size() == 3, "v1 compatibility failed");
+        Require(DecodeStaticAsset(EncodeStaticAsset(old)).id == old.id, "v1 to v2 migration failed");
+        std::vector<float> tangentVertices;
+        for (size_t i = 0; i < 3; ++i) {
+            tangentVertices.insert(tangentVertices.end(), asset.vertices[i].position, asset.vertices[i].position + 3);
+            tangentVertices.insert(tangentVertices.end(), {0,0,1, 0,0, 1,0,0,1});
+        }
+        std::vector<uint8_t> tangentBytes(tangentVertices.size() * sizeof(float));
+        std::memcpy(tangentBytes.data(), tangentVertices.data(), tangentBytes.size()); Write(root/L"tangent.bin", tangentBytes);
+        const std::string tangentJson = R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"scale":[1,1,1]}],"buffers":[{"uri":"tangent.bin","byteLength":144}],"bufferViews":[{"buffer":0,"byteLength":144,"byteStride":48}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-2,-2,-2],"max":[2,2,2]},{"bufferView":0,"byteOffset":12,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":0,"byteOffset":24,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":0,"byteOffset":32,"componentType":5126,"count":3,"type":"VEC4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"TANGENT":3}}]}]})";
+        Text(root/L"tangent.gltf", tangentJson);
+        auto tangentMesh = CookStatic(root/L"tangent.gltf", "tests/tangent");
+        Require(tangentMesh.tangents.size() == 3 && tangentMesh.tangents[0][0] == 1 && tangentMesh.tangents[0][3] == -1, "Tangent handedness conversion failed");
+        Text(root/L"tangent.gltf", Replace(tangentJson, "[1,1,1]", "[-0.001,0.002,0.003]"));
+        tangentMesh = CookStatic(root/L"tangent.gltf", "tests/tangent");
+        Require(tangentMesh.tangents[0][0] == -1 && tangentMesh.tangents[0][3] == 1, "Mirrored tangent conversion failed");
+        Require(DecodeStaticAsset(EncodeStaticAsset(tangentMesh)).tangents == tangentMesh.tangents, "Tangent roundtrip failed");
+        tangentMesh.tangents[0] = {0,0,1,1}; Reject([&] { ValidateAsset(tangentMesh); }, "Parallel tangent");
         const std::string oldNodes = R"("nodes":[{"mesh":0,"translation":[0,0,1]},{"mesh":1}])";
         const auto nodes = [&](const std::string& text) {
             Text(root/L"scaled.gltf",Replace(json,oldNodes,"\"nodes\":"+text));

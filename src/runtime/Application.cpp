@@ -1,4 +1,5 @@
 #include "runtime/Application.h"
+#include "gameplay/ScenePlayback.h"
 #include <shellapi.h>
 #include <windowsx.h>
 #include <algorithm>
@@ -26,7 +27,7 @@ struct LegacyPreview {
     } vfx;
 };
 struct Options {
-    std::filesystem::path scene;
+    std::filesystem::path scene, workspace;
     RendererOptions renderer;
     UINT64 frameLimit = 0;
     bool smoke = false;
@@ -65,6 +66,7 @@ Options ParseOptions() {
             else if (arg == L"--smoke-test") result.smoke = true;
             else if (arg == L"--capture") result.capture = value();
             else if (arg == L"--log") result.log = value();
+            else if (arg == L"--workspace") result.workspace=value();
             else if (arg == L"--scene") result.scene=value();
             else if (arg == L"--asset") result.assets[0] = value();
             else if (arg == L"--asset2") result.assets[1] = value();
@@ -119,8 +121,8 @@ Options ParseOptions() {
 
 class Application final {
 public:
-    Application(HINSTANCE instance, const wchar_t* name, Overlay* overlay, Log& log, Options options, GameLoop* game)
-        : instance_(instance), name_(name), overlay_(overlay), game_(game), log_(log), options_(std::move(options)), renderer_(log), scene_(renderer_, log) {}
+    Application(HINSTANCE instance, const wchar_t* name, Overlay* overlay, Log& log, Options options)
+        : instance_(instance), name_(name), overlay_(overlay), log_(log), options_(std::move(options)), renderer_(log), scene_(renderer_, log) {}
     ~Application() {
         try { renderer_.WaitIdle(); } catch (const std::exception& e) { log_.Write(e.what()); }
         if (overlay_) overlay_->Shutdown();
@@ -170,10 +172,11 @@ public:
             ConfigureLegacyScene();
             settings_.diagnosticTriangle = scene_.Document().assets.empty() || options_.smoke;
         }
-        if (game_) game_->Initialize(scene_);
+        if (!overlay_ && !options_.scene.empty()) playback_.Initialize(scene_);
         if (overlay_) {
             overlay_->Initialize(window_, renderer_, scene_, log_);
             overlayReady_ = true;
+            if (!options_.workspace.empty() || (options_.scene.empty() && !options_.frameLimit)) overlay_->OpenStartup(options_.workspace);
         }
         ShowWindow(window_, SW_SHOW);
         log_.Write("Window shown; initialization complete (not yet proof of rendering)");
@@ -257,7 +260,7 @@ public:
             stats_.frameMs = dt * 1000;
             if (overlay_) overlay_->Build(stats_, input_, settings_);
             if (!overlay_ || !overlay_->CapturesKeyboard()) {
-                if (input_.pressed[VK_ESCAPE] && (!overlay_ || overlay_->CanClose())) { running_ = false; continue; }
+                if (input_.pressed[VK_ESCAPE] && !overlay_) { running_ = false; continue; }
                 if (input_.pressed[VK_SPACE]) {
                     settings_.x = 0; settings_.y = 0;
                     log_.Write("Input: Space reset triangle");
@@ -270,16 +273,17 @@ public:
             }
             const auto sceneSeconds = (options_.integrationSmoke||options_.vfxCheck)?1.0f/60.0f:static_cast<float>(std::min(dt,0.1));
             auto& activeScene = overlay_ ? overlay_->UpdateScene(scene_, sceneSeconds) : scene_;
-            if (!overlay_ && !game_) scene_.Update(sceneSeconds);
+
             if (!options_.integrationSmoke) {
                 const auto& view = activeScene.Document().view;
                 settings_.cameraYaw = view.yaw; settings_.cameraPitch = view.pitch; settings_.cameraDistance = view.distance;
                 settings_.clear = view.background; settings_.unlit = view.unlit;
                 settings_.lighting = view.lighting;
             }
-            if (game_) {
-                game_->Update(scene_, input_, sceneSeconds, settings_);
+            if (!overlay_) {
+                if (!options_.scene.empty()) playback_.Update(scene_, input_, sceneSeconds);
                 scene_.Update(sceneSeconds);
+                if (!options_.scene.empty()) playback_.ConfigureView(scene_, settings_);
             }
             if (overlay_) overlay_->ConfigureView(settings_);
             auto* list = renderer_.BeginFrame(settings_, activeScene.DrawItems(), settings_.diagnosticTriangle);
@@ -454,7 +458,7 @@ private:
     HINSTANCE instance_;
     const wchar_t* name_;
     Overlay* overlay_;
-    GameLoop* game_;
+    ScenePlayback playback_;
     Log& log_;
     Options options_;
     Renderer renderer_;
@@ -472,11 +476,11 @@ private:
 };
 }
 
-int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay, GameLoop* game) {
+int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay) {
     std::unique_ptr<Log> log;
     bool unattended = false;
     try {
-        if (overlay && game) throw std::runtime_error("Editor overlay and GameLoop require separate hosts");
+
         auto options = ParseOptions();
         unattended = options.frameLimit != 0;
         if (options.log.empty()) {
@@ -488,7 +492,7 @@ int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay, Ga
         }
         log = std::make_unique<Log>(options.log);
         log->Write("Starting " + Utf8(name) + " | C++20 | Phase 0C");
-        Application application(instance, name, overlay, *log, std::move(options), game);
+        Application application(instance, name, overlay, *log, std::move(options));
         return application.Run();
     } catch (const std::exception& e) {
         const auto message = std::string("Fatal: ") + e.what();

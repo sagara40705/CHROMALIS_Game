@@ -69,17 +69,17 @@ Effekseer同梱LLGIのDX12 texture uploadには内部の無期限待機がある
 cmake --preset vs2026
 cmake --build --preset debug --parallel 4
 ctest --preset debug
-& out/build/vs2026/Debug/ChromalisAssetCooker.exe assets/RiggedFigure/RiggedFigure.glb out/cooked/RiggedFigure.cskin --id samples/rigged-figure
-& out/build/vs2026/Debug/ChromalisAssetCooker.exe assets/Cube/Cube.gltf out/cooked/Cube.cmesh --id samples/cube
-& out/build/vs2026/Debug/ChromalisGame.exe --asset out/cooked/Cube.cmesh --animation out/cooked/RiggedFigure.cskin --vfx assets/Vfx/Pulse.efkefc
+& out/build/vs2026/Debug/ChromalisAssetCooker.exe samples/Assets/RiggedFigure/RiggedFigure.glb out/cooked/RiggedFigure.cskin --id samples/rigged-figure
+& out/build/vs2026/Debug/ChromalisAssetCooker.exe samples/Assets/Cube/Cube.gltf out/cooked/Cube.cmesh --id samples/cube
+& out/build/vs2026/Debug/ChromalisGame.exe --asset out/cooked/Cube.cmesh --animation out/cooked/RiggedFigure.cskin --vfx samples/Assets/Vfx/Pulse.efkefc
 ```
 
 `--bind-pose`でBind表示、`--frames 120 --capture out/preview.bmp`で有限実行、`--gpu-validation`でGPU-based Validation。Releaseは同名preset。`--no-vsync`は負荷計測用。70フレーム以降のCPU記録時間（Fence待ち込み/除外）とGPU timestamp時間を終了ログへ出す。Present待ちやCook時間をGPU時間とは呼ばない。
 
 オフライン取得は`CHROMALIS_OZZ_ARCHIVE`、`CHROMALIS_EFFEKSEER_ARCHIVE`に同一SHA-256のローカルアーカイブを指定する。Game-onlyは`CHROMALIS_BUILD_COOKER=OFF`と`BUILD_TESTING=OFF`。Dear ImGuiはDevelopment側だけの依存。
 
-EditorではCook欄の出力拡張子を`.cskin`にしてCook + Reload、またはAnimation欄で変換済みファイルを選択する。Clip、Play/Resume、Pause、Stop、速度、時刻、Loop、Rest/Bind、World、Joint位置を操作できる。VFX欄はパス・Reload、Play/Stop、TRS、個数、Joint位置追従、粒子数/エラーを表示する。VFX再変換は[素材手順](../assets/Vfx/README.md)を参照。相対パスはプロセスの作業ディレクトリ基準。
+EditorではCook欄の出力拡張子を`.cskin`にしてCook + Reload、またはAnimation欄で変換済みファイルを選択する。Clip、Play/Resume、Pause、Stop、速度、時刻、Loop、Rest/Bind、World、Joint位置を操作できる。VFX欄はパス・Reload、Play/Stop、TRS、個数、Joint位置追従、粒子数/エラーを表示する。VFX再変換は[素材手順](../samples/Assets/Vfx/README.md)を参照。相対パスはプロセスの作業ディレクトリ基準。
 
 ## 検証の限界
 
-外部実モデルは[Cesium RiggedFigure](../assets/RiggedFigure/README.md)の1種類。TRS、複数Clip、Socket、UV付きスキニングは生成fixtureでも検証するが、他のDCCや全キャラクターへの互換性証明ではない。VFXは手続き生成の代替PNGを使用し、AI生成素材そのものの品質・権利・変換は未検証。最終的なアート品質、長時間運用、大量実キャラクター、悪意あるVFXバイナリ、実ゲームの性能予算は別途評価する。
+外部実モデルは[Cesium RiggedFigure](../samples/Assets/RiggedFigure/README.md)の1種類。TRS、複数Clip、Socket、UV付きスキニングは生成fixtureでも検証するが、他のDCCや全キャラクターへの互換性証明ではない。VFXは手続き生成の代替PNGを使用し、AI生成素材そのものの品質・権利・変換は未検証。最終的なアート品質、長時間運用、大量実キャラクター、悪意あるVFXバイナリ、実ゲームの性能予算は別途評価する。

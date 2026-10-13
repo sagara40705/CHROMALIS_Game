@@ -1,4 +1,4 @@
-#include "gameplay/PlayerDemo.h"
+#include "gameplay/ScenePlayback.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -45,6 +45,8 @@ SceneDocument Fixture(const std::filesystem::path& root) {
     document.Entity(id).asset = asset.mesh.id; document.Entity(id).animation.library = "test/common";
     document.Entity(id).animation.clip = "Idle";
     const auto child = document.Add("Child", id); document.Entity(child).local.position = {0,2,0};
+    document.play.player = document.play.cameraTarget = id;
+    document.view.yaw = 0.35f; document.view.pitch = 0.55f; document.view.distance = 7;
     return document;
 }
 // 画素が背景一色のまま通過しないことを確認する。外観の良し悪しは別途目視する。
@@ -59,7 +61,7 @@ void CheckCapture(const std::filesystem::path& path) {
     Require(changed > 100, "Capture contains no visible geometry");
 }
 void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& root, HWND window) {
-    PlayerDemo demo; demo.Initialize(scene);
+    ScenePlayback demo; demo.Initialize(scene);
     const auto initial = scene.Document().Entity(1).local;
     const auto generation = scene.Generation(1);
     const auto mesh = scene.DrawItems().front().mesh;
@@ -68,7 +70,7 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
     settings.clear = scene.Document().view.background;
     auto* player = scene.Animation(1);
     const auto frame = [&](const InputState& input, const char* capture = nullptr) {
-        Pump(); demo.Update(scene, input, 1.0f/60, settings); scene.Update(1.0f/60);
+        Pump(); demo.Update(scene, input, 1.0f/60); scene.Update(1.0f/60); demo.ConfigureView(scene, settings);
         renderer.BeginFrame(settings, scene.DrawItems()); renderer.BeginOverlay();
         renderer.EndFrame(false, capture != nullptr);
         if (capture) { renderer.SaveCapture(root/capture, false); CheckCapture(root/capture); }
@@ -84,11 +86,15 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
     const auto& joints = player->Asset().joints;
     const auto foot = std::find_if(joints.begin(), joints.end(), [](const auto& joint) { return joint.name == "Foot.L"; });
     XMFLOAT3 stanceStart{};
-    for (int i = 0; i < 60; ++i) {
-        frame(input, i == 15 ? "walk.bmp" : nullptr);
-        if (foot != joints.end() && (i == 10 || i == 20)) {
+    // 配置時の向きを維持するため、開始直後は旋回する。次の周期で接地の滑りだけを測る。
+    const auto walk = std::find_if(player->Clips().begin(), player->Clips().end(), [&](const auto& clip) { return clip.name == scene.Document().play.clips[1]; });
+    const int cycleFrames = static_cast<int>(std::lround(walk->duration * 60));
+    const int walkFrames = cycleFrames + 60;
+    for (int i = 0; i < walkFrames; ++i) {
+        frame(input, i == cycleFrames + 15 ? "walk.bmp" : nullptr);
+        if (foot != joints.end() && (i == cycleFrames + 10 || i == cycleFrames + 20)) {
             const auto point = player->Socket(static_cast<size_t>(foot - joints.begin()), scene.World(1));
-            if (i == 10) stanceStart = point;
+            if (i == cycleFrames + 10) stanceStart = point;
             else {
                 const float slide = std::hypot(point.x-stanceStart.x, point.z-stanceStart.z);
                 std::cout << "Walk stance foot drift (m): " << slide << '\n';
@@ -97,7 +103,7 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
         }
     }
     Require(player->Clips()[player->playback.clip].name == "Walk", "Walk clip");
-    Require(std::abs(std::hypot(demo.Motion().position[0], demo.Motion().position[2])-PlayerMotion::WalkSpeed) < 0.001f, "Walk distance");
+    Require(std::abs(std::hypot(demo.Motion().position[0], demo.Motion().position[2])-ScenePlaySettings{}.walkSpeed * walkFrames / 60) < 0.001f, "Walk distance");
     const auto walkPalette = player->Palette();
     input.down[VK_SHIFT] = true;
     for (int i = 0; i < 60; ++i) {
@@ -114,7 +120,7 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
     }
     Require(player->Clips()[player->playback.clip].name == "Run", "Run clip");
     Require(std::abs(std::hypot(demo.Motion().position[0], demo.Motion().position[2])-
-        (PlayerMotion::WalkSpeed + PlayerMotion::RunSpeed)) < 0.001f, "Run distance");
+        (ScenePlaySettings{}.walkSpeed * walkFrames / 60 + ScenePlaySettings{}.runSpeed)) < 0.001f, "Run distance");
     frame(input);
     Require(std::memcmp(walkPalette.data(), player->Palette().data(), walkPalette.size()*sizeof(XMFLOAT4X4)) != 0, "Animation palette never changed");
     input = {}; frame(input, "stopped.bmp");

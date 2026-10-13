@@ -1,12 +1,14 @@
 # アセット制作・納品フォーマット
 
+材質の最新対応範囲（PBR・Normal/AO/Emissive・Blend・Mip）と制作手順は[materials.md](materials.md)を参照。以下のPhase別記述より同文書を優先する。
+
 現在のCHROMALISへ取り込める制作物の仕様。モデル・Animation・VFXの制作者向けに、制作元とゲーム用変換結果を区別する。2026-10-13時点の実装に基づく。glTF全機能や任意のDCC出力を受け入れる仕様ではない。
 
 ## 1. ファイルの種類
 
 | 制作物 | 制作・受け渡し形式 | ゲームで読む形式 | 作成方法 |
 |---|---|---|---|
-| 静的モデル | glTF 2.0 `.glb` / `.gltf`＋依存ファイル | `.cmesh` v1 | AssetCookerで変換 |
+| 静的モデル | glTF 2.0 `.glb` / `.gltf`＋依存ファイル | `.cmesh` v2（v1読込可） | AssetCookerで変換 |
 | 骨格付きモデル | glTF 2.0 `.glb` / `.gltf` | `.cskin` v2（旧v1も読込可） | AssetCookerで変換 |
 | 共通Skeleton・Clip | glTF 2.0 `.glb` / `.gltf` | `.canim` v1 | AssetCookerで変換 |
 | モデルのBase Color | PNG / JPEG、glTFに参照または埋め込み | モデル内のRGBA8画像 | モデルと一緒に変換 |
@@ -81,14 +83,14 @@ out/cooked/
 | 項目 | 現在の契約 |
 |---|---|
 | 色画像 | PNG / JPEG。Base ColorはsRGBとして読み込む。色プロファイルの変換処理はない |
-| 透明度 | PNGのStraight Alpha。OPAQUEまたはMASK。半透明メッシュのBLENDは不可 |
+| 透明度 | PNGのStraight Alpha。OPAQUE / MASK / BLEND（Primitive順ソート） |
 | Alpha Cutoff | 有限かつ0以上。1超は全透明の意味を保持。1へ丸めない |
 | 色係数 | glTFのBase Color Factor、Editorの色・照明・Emissionは線形値 |
 | UV | TEXCOORD_0。UV/画像の上下はCookerで反転しない |
 | Sampler | Repeat / Clamp / Mirror、Nearest / Linear。現状はmagFilter由来で、Mipは生成しない |
 | 材質 | Base Color、両面、MASK、KHR_materials_unlit。複数材質可能 |
 
-PBRのMetallic/Roughness値は保持するが描画に使用しない。Normal/AO/Emissive等の追加マップや頂点カラーに依存する画作りはできない。未対応の必須glTF拡張は拒否する。任意の追加情報が読み込みを通っても、表現が再現されたとは判断しない。
+Metallic/Roughness PBRとNormal/AO/Emissive Mapを使用できる。Normal Mapをベイクする場合はTANGENTも出力する。頂点カラーは未対応。未対応の必須glTF拡張は拒否する。任意の追加情報が読み込みを通っても、表現が再現されたとは判断しない。
 
 Toonの閾値・Softness・暗部色、Emission色、投影影の設定はCHROMALISのSceneへ保存する。DCCのToonシェーダーやノード構成は移植されない。材質テクスチャはモデルに含まれ、Editorから別画像へ直接差し替える機能はない。画像を更新してモデルを再変換する。
 
@@ -106,7 +108,7 @@ Toonの閾値・Softness・暗部色、Emission色、投影影の設定はCHROMA
 
 Premultiplied Alpha、背景Distortion、Soft Particle、Custom Material、音声、GPU Particleは現在の対応経路に含めない。Flipbook・Noise・Ribbon等はライブラリに機能があるが、CHROMALISでの個別検証が必要。SDR出力のため強い加算色は飽和し、HDR/Bloomは使えない。
 
-AI素材そのものの制作工程は未検証。既存の検証素材は手続き生成PNG。制作に使う場合はサービス名・生成日・利用条件・加工履歴を記録する。[同梱VFXの再出力手順](../assets/Vfx/README.md)も参照。
+AI素材そのものの制作工程は未検証。既存の検証素材は手続き生成PNG。制作に使う場合はサービス名・生成日・利用条件・加工履歴を記録する。[同梱VFXの再出力手順](../samples/Assets/Vfx/README.md)も参照。
 
 ## 8. 変換・更新手順
 

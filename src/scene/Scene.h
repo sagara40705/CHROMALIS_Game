@@ -51,11 +51,22 @@ struct SceneView {
     bool unlit = false;
     SceneLighting lighting;
 };
+// Sceneごとに保存する実行設定。参照には表示名ではなくEntity IDを使う。
+struct ScenePlaySettings {
+    EntityId player = 0, cameraTarget = 0;
+    float walkSpeed = 0.34f / 0.60f, runSpeed = 0.44f / (0.38f * 0.75f), turnSpeed = 12;
+    float forwardYaw = 3.14159265f, groundHeight = 0;
+    std::array<float, 2> minimum{-11.5f, -11.5f}, maximum{11.5f, 11.5f};
+    std::array<std::string, 3> clips{"Idle", "Walk", "Run"};
+    std::array<float, 3> fixedTarget{0, 0, 0};
+    float cameraHeight = 0.9f, cameraFollow = 10;
+};
 
 // 制作時の状態だけを保持する。再生中の時刻とGPU参照は保存しない。
 struct SceneDocument {
     EntityId nextId = 1;
     SceneView view;
+    ScenePlaySettings play;
     std::vector<SceneAsset> assets;
     std::vector<SceneEntity> entities;
     struct Material { std::string id; MaterialSurface surface; };

@@ -259,10 +259,11 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
         imp.asset.textures.push_back(std::move(texture));
     }
     imp.asset.materials.emplace_back();
+    imp.asset.materials.back().pbr = 1;
     for (size_t i = 0; i < data->materials_count; ++i) {
         const auto& m = data->materials[i]; MeshMaterial out;
         out.unlit = m.unlit ? 1u : 0u;
-        Need(m.alpha_mode != cgltf_alpha_mode_blend, "BLEND materials unsupported in 0B; use OPAQUE or MASK");
+        out.pbr = 1; out.alphaBlend = m.alpha_mode == cgltf_alpha_mode_blend ? 1u : 0u;
         Need(!m.has_pbr_specular_glossiness, "Specular/glossiness material extension unsupported");
         const auto& pbr = m.pbr_metallic_roughness;
         std::copy_n(pbr.base_color_factor, 4, out.baseColor.begin());
@@ -278,6 +279,23 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
                 out.nearest = s->mag_filter == cgltf_filter_type_nearest ? 1u : 0u;
             }
         }
+        const auto map = [&](const cgltf_texture_view& view) {
+            Need(!view.has_transform && view.texcoord == 0, "Material maps require TEXCOORD_0 without texture transform");
+            TextureBinding result;
+            if (view.texture) {
+                Need(view.texture->image != nullptr, "Material map lacks supported image");
+                result.texture = static_cast<uint32_t>(view.texture->image - data->images) + 1;
+                if (const auto* sampler = view.texture->sampler) {
+                    result.wrapU = Wrap(sampler->wrap_s); result.wrapV = Wrap(sampler->wrap_t);
+                    result.nearest = sampler->mag_filter == cgltf_filter_type_nearest ? 1u : 0u;
+                }
+            }
+            return result;
+        };
+        out.metallicRoughnessMap = map(pbr.metallic_roughness_texture);
+        out.normalMap = map(m.normal_texture); out.occlusionMap = map(m.occlusion_texture); out.emissiveMap = map(m.emissive_texture);
+        std::copy_n(m.emissive_factor, 3, out.emissive.begin());
+        out.normalScale = m.normal_texture.scale; out.occlusionStrength = m.occlusion_texture.scale;
         imp.asset.materials.push_back(out);
     }
     std::vector<bool> visited(data->nodes_count, false);
@@ -304,6 +322,8 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
             const size_t count = pos->count;
             auto positions = Attribute(p, cgltf_attribute_type_position, cgltf_type_vec3, count, true);
             auto normals = Attribute(p, cgltf_attribute_type_normal, cgltf_type_vec3, count, false);
+            auto tangents = Attribute(p, cgltf_attribute_type_tangent, cgltf_type_vec4, count, false);
+            const bool hasTangents = !tangents.empty() && !normals.empty();
             if(skeletal) {
                 Need(!normals.empty(),"Skinned meshes require authored normals");
                 auto joints=Attribute(p,cgltf_attribute_type_joints,cgltf_type_vec4,count,true);
@@ -312,7 +332,9 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
                 for(size_t n=0;n<count;++n){SkinVertex v;float sum=0;for(size_t k=0;k<4;++k){const float j=joints[n*4+k];Need(j>=0 && j<skeletal->bindings.size() && std::floor(j)==j && weights[n*4+k]>=0,"Invalid joint/weight");v.joints[k]=static_cast<uint32_t>(j);v.weights[k]=weights[n*4+k];sum+=v.weights[k];}Need(sum>0 && std::isfinite(sum),"Zero/invalid skin weight sum");for(float& w:v.weights)w/=sum;skeletal->skin.push_back(v);}
             }
             const auto material = p.material ? static_cast<uint32_t>(p.material - data->materials) + 1 : 0;
-            auto uvs = Attribute(p, cgltf_attribute_type_texcoord, cgltf_type_vec2, count, imp.asset.materials[material].texture != 0);
+            const auto& surface = imp.asset.materials[material];
+            const bool needsUv = surface.texture || surface.metallicRoughnessMap.texture || surface.normalMap.texture || surface.occlusionMap.texture || surface.emissiveMap.texture;
+            auto uvs = Attribute(p, cgltf_attribute_type_texcoord, cgltf_type_vec2, count, needsUv);
             const auto indexCount = p.indices ? p.indices->count : count;
             Need(indexCount && indexCount % 3 == 0 && indexCount <= 6000000 - imp.asset.indices.size(), "Invalid triangle index count");
             std::vector<uint32_t> indices(indexCount);
@@ -349,6 +371,13 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
                 const float magnitude = std::max({std::abs(XMVectorGetX(transformed)),std::abs(XMVectorGetY(transformed)),std::abs(XMVectorGetZ(transformed))});
                 Need(std::isfinite(magnitude) && magnitude > 0, "Invalid transformed normal");
                 XMStoreFloat3(&normal, XMVector3Normalize(transformed / magnitude));
+                if (hasTangents) {
+                    Need(std::abs(tangents[n*4+3]) == 1, "Invalid tangent handedness");
+                    auto t = XMVector3TransformNormal(XMVectorSet(tangents[n*4], tangents[n*4+1], tangents[n*4+2], 0), skeletal ? XMMatrixIdentity() : world);
+                    Need(XMVectorGetX(XMVector3LengthSq(t)) > 0, "Zero tangent");
+                    XMFLOAT3 tangent; XMStoreFloat3(&tangent, XMVector3Normalize(t));
+                    imp.asset.tangents.push_back({tangent.x, tangent.y, -tangent.z, tangents[n*4+3] * ((!skeletal && mirrored) ? 1.0f : -1.0f)});
+                } else imp.asset.tangents.push_back({1, 0, 0, 0});
                 imp.asset.vertices.push_back({{position.x,position.y,-position.z},{normal.x,normal.y,-normal.z},{uvs.empty()?0:uvs[n*2],uvs.empty()?0:uvs[n*2+1]}});
             }
             const auto first = static_cast<uint32_t>(imp.asset.indices.size());
@@ -364,6 +393,7 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
     const auto* scene = data->scene ? data->scene : (data->scenes_count ? &data->scenes[0] : nullptr);
     if (scene) { for (size_t i = 0; i < scene->nodes_count; ++i) visit(scene->nodes[i], XMMatrixIdentity(), 0); }
     else for (size_t i = 0; i < data->nodes_count; ++i) if (!data->nodes[i].parent) visit(&data->nodes[i], XMMatrixIdentity(), 0);
+    if (std::none_of(imp.asset.tangents.begin(), imp.asset.tangents.end(), [](const auto& t) { return t[3] != 0; })) imp.asset.tangents.clear();
     ValidateAsset(imp.asset); return std::move(imp.asset);
 }
 StaticAsset CookStatic(const std::filesystem::path& source,const std::string& id) {return CookModel(source,id,nullptr);}

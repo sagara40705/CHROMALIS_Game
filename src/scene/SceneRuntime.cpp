@@ -215,6 +215,7 @@ bool SceneRuntime::Save(const std::filesystem::path& path) {
         return false;
     }
 }
+bool SceneRuntime::RefreshAssets() { return Replace(Document(), "*"); }
 bool SceneRuntime::New() {
     if (!Apply(SceneDocument{})) return false;
     path_.clear(); dirty_ = false;

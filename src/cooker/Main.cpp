@@ -57,7 +57,7 @@ int wmain(int argc, wchar_t** argv) {
         else if(skinned)chromalis::SaveSkeletalAsset(skin,argv[2]);
         else chromalis::SaveStaticAsset(a, argv[2]);
         const auto message = animation ? "Cook OK: " + library.id + " | joints=" + std::to_string(library.joints.size()) + " clips=" + std::to_string(library.clips.size()) :
-            "Cook OK: " + a.id + " | vertices=" + std::to_string(a.vertices.size()) + " indices=" + std::to_string(a.indices.size()) + " parts=" + std::to_string(a.parts.size()) + " textures=" + std::to_string(a.textures.size()) + " | base-color preview; PBR lighting/maps, mipmaps and vertex colors are not evaluated in 0B";
+            "Cook OK: " + a.id + " | vertices=" + std::to_string(a.vertices.size()) + " indices=" + std::to_string(a.indices.size()) + " parts=" + std::to_string(a.parts.size()) + " textures=" + std::to_string(a.textures.size()) + " | PBR material maps; TEXCOORD_0";
         if (handle.value != INVALID_HANDLE_VALUE) {
             const auto line = message + '\n'; DWORD written = 0;
             if (!WriteFile(handle.value,line.data(),static_cast<DWORD>(line.size()),&written,nullptr) || written != line.size() || !SetEndOfFile(handle.value))

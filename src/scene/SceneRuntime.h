@@ -25,6 +25,7 @@ public:
     bool Open(const std::filesystem::path& path);
     bool Save(const std::filesystem::path& path);
     bool New();
+    bool RefreshAssets();
     bool ReloadAsset(const std::string& id);
     bool ReloadAsset(const std::string& id, const std::filesystem::path& path);
     bool AssignAsset(EntityId entity, const std::filesystem::path& path, SceneAssetKind kind);

@@ -132,7 +132,9 @@ private:
     std::array<float, 4> lastClear_{};
     struct GpuModel {
         std::string id;
-        ComPtr<ID3D12Resource> vertex, index;
+        ComPtr<ID3D12Resource> vertex, index, tangent;
+        D3D12_VERTEX_BUFFER_VIEW tangentView{};
+        bool hasTangents = false;
         ComPtr<ID3D12Resource> skin;
         D3D12_VERTEX_BUFFER_VIEW skinView{};
         std::vector<ComPtr<ID3D12Resource>> textures;
@@ -140,6 +142,7 @@ private:
         D3D12_VERTEX_BUFFER_VIEW vb{};
         D3D12_INDEX_BUFFER_VIEW ib{};
         std::vector<MeshPart> parts;
+        std::vector<DirectX::XMFLOAT3> partCenters;
         std::vector<MeshMaterial> materials;
     };
     struct MeshEntry { std::unique_ptr<GpuModel> model; uint32_t generation = 1; };
@@ -155,8 +158,8 @@ private:
     bool sceneSurfaceRecording_ = false;
     ComPtr<ID3D12DescriptorHeap> dsv_;
     ComPtr<ID3D12RootSignature> meshRoot_;
-    std::array<ComPtr<ID3D12PipelineState>, 2> meshPso_;
-    std::array<ComPtr<ID3D12PipelineState>, 2> skinPso_;
+    std::array<ComPtr<ID3D12PipelineState>, 4> meshPso_;
+    std::array<ComPtr<ID3D12PipelineState>, 4> skinPso_;
     std::array<ComPtr<ID3D12PipelineState>, 2> shadowMeshPso_, shadowSkinPso_;
     ComPtr<ID3D12Resource> shadowDepth_;
     ComPtr<ID3D12DescriptorHeap> shadowDsv_;

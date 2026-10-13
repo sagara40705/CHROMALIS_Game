@@ -10,11 +10,11 @@ PNGはStraight Alpha。Pulseは64×64、十分な外周余白を持つ手続き�
 2. Game直下から以下を実行する。スクリプトはPNGを再生成するため、手編集したPNGは別名で保管する。
 
 ```powershell
-& assets/Vfx/Build.ps1 -Effekseer C:/tools/Effekseer1.80.7Win/Tool/bin/Effekseer.exe
+& samples/Assets/Vfx/Build.ps1 -Effekseer C:/tools/Effekseer1.80.7Win/Tool/bin/Effekseer.exe
 ```
 
 3. 公式CUI `-cui -in source.efkproj -o output.efkefc`によって実際のゲーム形式へ出力する。新しい候補ファイルのmagicを確認してから既存出力を置換する。
-4. EditorのVFXパスへ`assets/Vfx/Pulse.efkefc`（Development直下では`Game/assets/...`）を指定し、Reload、Playで確認する。変更後は再出力→Reload→Play。
+4. EditorのVFXパスへ`samples/Assets/Vfx/Pulse.efkefc`（Development直下では`Game/samples/Assets/Vfx/Pulse.efkefc`）を指定し、Reload、Playで確認する。変更後は再出力→Reload→Play。
 
 今回、efkprojの構成と公式ツールによるCUI変換・Runtime表示を検証した。Effekseer GUI上の編集操作は未検証。GUIで色・寿命・サイズ等を編集する場合も、同じefkefc/PNG出力を読み込む。
 

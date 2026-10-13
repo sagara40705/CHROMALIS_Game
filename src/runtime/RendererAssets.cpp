@@ -1,4 +1,5 @@
 #include "runtime/Renderer.h"
+#include "assets/TextureMip.h"
 #include "Mesh_vs.h"
 #include "Mesh_ps.h"
 #include "Skin_vs.h"
@@ -80,10 +81,17 @@ void Renderer::DisableSceneSurface() {
     sceneWidth_ = sceneHeight_ = 0;
 }
 void Renderer::CreateMeshPipeline() {
-    D3D12_DESCRIPTOR_RANGE srv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0};
+    D3D12_DESCRIPTOR_RANGE srv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,5,0,0,0};
     D3D12_DESCRIPTOR_RANGE sampler{D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,1,0,0,0};
-    D3D12_DESCRIPTOR_RANGE shadowSrv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,1,0,0};
-    D3D12_ROOT_PARAMETER parameters[5]{};
+    D3D12_DESCRIPTOR_RANGE shadowSrv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,5,0,0};
+    D3D12_ROOT_PARAMETER parameters[9]{};
+    D3D12_DESCRIPTOR_RANGE mapSamplers[4]{};
+    for (UINT i = 0; i < 4; ++i) {
+        mapSamplers[i] = {D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, i + 1, 0, 0};
+        parameters[5 + i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        parameters[5 + i].DescriptorTable = {1, &mapSamplers[i]};
+        parameters[5 + i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].Descriptor = {0,0}; parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     parameters[1].ParameterType = parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -99,8 +107,8 @@ void Renderer::CreateMeshPipeline() {
     comparison.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
     comparison.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     comparison.MaxLOD = D3D12_FLOAT32_MAX; comparison.MaxAnisotropy = 1;
-    comparison.ShaderRegister = 1; comparison.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-    D3D12_ROOT_SIGNATURE_DESC root{}; root.NumParameters = 5; root.pParameters = parameters;
+    comparison.ShaderRegister = 5; comparison.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_ROOT_SIGNATURE_DESC root{}; root.NumParameters = 9; root.pParameters = parameters;
     root.NumStaticSamplers = 1; root.pStaticSamplers = &comparison;
     root.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     ComPtr<ID3DBlob> blob, errors;
@@ -112,10 +120,11 @@ void Renderer::CreateMeshPipeline() {
         {"POSITION",0,DXGI_FORMAT_R32G32B32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"NORMAL",0,DXGI_FORMAT_R32G32B32_FLOAT,0,12,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+        {"TANGENT",0,DXGI_FORMAT_R32G32B32A32_FLOAT,2,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"BLENDINDICES",0,DXGI_FORMAT_R32G32B32A32_UINT,1,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"BLENDWEIGHT",0,DXGI_FORMAT_R32G32B32A32_FLOAT,1,16,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0}};
     D3D12_GRAPHICS_PIPELINE_STATE_DESC p{}; p.pRootSignature = meshRoot_.Get();
-    p.VS = {Mesh_vs,sizeof(Mesh_vs)}; p.PS = {Mesh_ps,sizeof(Mesh_ps)}; p.InputLayout = {input,3};
+    p.VS = {Mesh_vs,sizeof(Mesh_vs)}; p.PS = {Mesh_ps,sizeof(Mesh_ps)}; p.InputLayout = {input,4};
     auto& blend = p.BlendState.RenderTarget[0];
     blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ONE;
     blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
@@ -130,18 +139,26 @@ void Renderer::CreateMeshPipeline() {
     p.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     p.NumRenderTargets = 1; p.RTVFormats[0] = SceneFormat; p.DSVFormat = DXGI_FORMAT_D32_FLOAT; p.SampleDesc.Count = 1;
     for (size_t i = 0; i < meshPso_.size(); ++i) {
-        p.RasterizerState.CullMode = i == 0 ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
+        p.RasterizerState.CullMode = i % 2 == 0 ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
+        blend.BlendEnable = i >= 2; blend.SrcBlend = D3D12_BLEND_SRC_ALPHA; blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        p.DepthStencilState.DepthWriteMask = i >= 2 ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
         Check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&meshPso_[i])),"Create mesh pipeline");
     }
-    p.VS={Skin_vs,sizeof(Skin_vs)};p.InputLayout={input,5};
-    for(size_t i=0;i<skinPso_.size();++i){p.RasterizerState.CullMode=i==0?D3D12_CULL_MODE_BACK:D3D12_CULL_MODE_NONE;Check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&skinPso_[i])),"Create skin pipeline");}
+    p.VS={Skin_vs,sizeof(Skin_vs)};p.InputLayout={input,6};
+    for(size_t i=0;i<skinPso_.size();++i){
+        p.RasterizerState.CullMode=i%2==0?D3D12_CULL_MODE_BACK:D3D12_CULL_MODE_NONE;
+        blend.BlendEnable = i >= 2;
+        p.DepthStencilState.DepthWriteMask = i >= 2 ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
+        Check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&skinPso_[i])),"Create skin pipeline");}
+    blend.BlendEnable = FALSE; p.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     p.NumRenderTargets = 0; p.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
     p.PS = {Shadow_ps, sizeof(Shadow_ps)};
     for (size_t i = 0; i < 2; ++i) {
         p.RasterizerState.CullMode = i == 0 ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
         Check(device_->CreateGraphicsPipelineState(&p, IID_PPV_ARGS(&shadowSkinPso_[i])), "Create skinned shadow pipeline");
     }
-    p.VS = {Mesh_vs, sizeof(Mesh_vs)}; p.InputLayout = {input, 3};
+    p.VS = {Mesh_vs, sizeof(Mesh_vs)}; p.InputLayout = {input, 4};
     for (size_t i = 0; i < 2; ++i) {
         p.RasterizerState.CullMode = i == 0 ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
         Check(device_->CreateGraphicsPipelineState(&p, IID_PPV_ARGS(&shadowMeshPso_[i])), "Create static shadow pipeline");
@@ -169,6 +186,14 @@ void Renderer::ReleaseMesh(MeshHandle handle) {
 std::unique_ptr<Renderer::GpuModel> Renderer::UploadModel(const StaticAsset& asset,const std::vector<SkinVertex>* skin) {
         auto candidate = std::make_unique<GpuModel>();
         candidate->id = asset.id; candidate->parts = asset.parts; candidate->materials = asset.materials;
+        for (const auto& part : asset.parts) {
+            DirectX::XMFLOAT3 center{};
+            for (size_t i = part.firstIndex; i < size_t(part.firstIndex) + part.indexCount; ++i) {
+                const auto& p = asset.vertices[asset.indices[i]].position;
+                center.x += p[0] / part.indexCount; center.y += p[1] / part.indexCount; center.z += p[2] / part.indexCount;
+            }
+            candidate->partCenters.push_back(center);
+        }
         ComPtr<ID3D12CommandAllocator> allocator;
         ComPtr<ID3D12GraphicsCommandList> commands;
         Check(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)),"Create asset upload allocator");
@@ -193,48 +218,81 @@ std::unique_ptr<Renderer::GpuModel> Renderer::UploadModel(const StaticAsset& ass
         uploadBuffer(asset.indices.data(),ibSize,candidate->index,D3D12_RESOURCE_STATE_INDEX_BUFFER);
         candidate->vb = {candidate->vertex->GetGPUVirtualAddress(),static_cast<UINT>(vbSize),sizeof(MeshVertex)};
         candidate->ib = {candidate->index->GetGPUVirtualAddress(),static_cast<UINT>(ibSize),DXGI_FORMAT_R32_UINT};
+        candidate->hasTangents = !asset.tangents.empty();
+        std::vector<std::array<float, 4>> fallback;
+        if (!candidate->hasTangents) fallback.resize(asset.vertices.size(), {1, 0, 0, 1});
+        const auto& tangents = candidate->hasTangents ? asset.tangents : fallback;
+        uploadBuffer(tangents.data(), tangents.size() * 16, candidate->tangent, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        candidate->tangentView = {candidate->tangent->GetGPUVirtualAddress(), static_cast<UINT>(tangents.size() * 16), 16};
         if(skin) {
             static_assert(sizeof(SkinVertex)==32);
             uploadBuffer(skin->data(),skin->size()*sizeof(SkinVertex),candidate->skin,D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
             candidate->skinView={candidate->skin->GetGPUVirtualAddress(),static_cast<UINT>(skin->size()*sizeof(SkinVertex)),sizeof(SkinVertex)};
         }
         D3D12_DESCRIPTOR_HEAP_DESC heap{}; heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; heap.NumDescriptors = static_cast<UINT>(asset.textures.size() + 1);
+        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; heap.NumDescriptors = static_cast<UINT>(asset.materials.size() * 5 + 1);
         Check(device_->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&candidate->srv)),"Create asset texture heap");
         auto cpu = candidate->srv->GetCPUDescriptorHandleForHeapStart();
         const auto srvStride = device_->GetDescriptorHandleIncrementSize(heap.Type);
-        for (const auto& t : asset.textures) {
+        std::vector<std::array<bool, 2>> used(asset.textures.size());
+        // 使われる色空間だけ生成する。同一画像を両用途で使う場合はMipも分ける。
+        for (const auto& material : asset.materials) {
+            used[material.texture][1] = true; used[material.emissiveMap.texture][1] = true;
+            used[material.metallicRoughnessMap.texture][0] = true; used[material.normalMap.texture][0] = true; used[material.occlusionMap.texture][0] = true;
+        }
+        candidate->textures.resize(asset.textures.size() * 2);
+        for (size_t textureIndex = 0; textureIndex < asset.textures.size(); ++textureIndex) for (bool srgb : {false, true}) {
+            if (!used[textureIndex][srgb]) continue;
+            const auto& t = asset.textures[textureIndex];
+            const auto mips = BuildMipChain(t, srgb);
             D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            desc.Width = t.width; desc.Height = t.height; desc.MipLevels = desc.DepthOrArraySize = 1;
-            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; desc.SampleDesc.Count = 1;
+            desc.Width = t.width; desc.Height = t.height; desc.MipLevels = static_cast<UINT16>(mips.size()); desc.DepthOrArraySize = 1;
+            desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS; desc.SampleDesc.Count = 1;
             ComPtr<ID3D12Resource> texture, upload;
             Check(device_->CreateCommittedResource(&gpuHeap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&texture)),"Create asset texture");
-            D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{}; UINT64 bytes = 0;
-            device_->GetCopyableFootprints(&desc,0,1,0,&layout,nullptr,nullptr,&bytes);
+            std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(mips.size()); UINT64 bytes = 0;
+            device_->GetCopyableFootprints(&desc,0,static_cast<UINT>(mips.size()),0,layouts.data(),nullptr,nullptr,&bytes);
             const auto buffer = Buffer(bytes);
             Check(device_->CreateCommittedResource(&cpuHeap,D3D12_HEAP_FLAG_NONE,&buffer,D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&upload)),"Create texture upload");
             uint8_t* mapped = nullptr; D3D12_RANGE noRead{0,0};
             Check(upload->Map(0,&noRead,reinterpret_cast<void**>(&mapped)),"Map texture upload");
-            for (UINT y = 0; y < t.height; ++y) std::memcpy(mapped + layout.Offset + size_t(y)*layout.Footprint.RowPitch,t.rgba.data()+size_t(y)*t.width*4,size_t(t.width)*4);
+            for (size_t level = 0; level < mips.size(); ++level) {
+                const auto& mip = mips[level]; const auto& layout = layouts[level];
+                for (UINT y = 0; y < mip.height; ++y) std::memcpy(mapped + layout.Offset + size_t(y)*layout.Footprint.RowPitch,mip.rgba.data()+size_t(y)*mip.width*4,size_t(mip.width)*4);
+            }
             upload->Unmap(0,nullptr);
-            D3D12_TEXTURE_COPY_LOCATION from{}; from.pResource = upload.Get(); from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; from.PlacedFootprint = layout;
+            for (size_t level = 0; level < mips.size(); ++level) {
+            D3D12_TEXTURE_COPY_LOCATION from{}; from.pResource = upload.Get(); from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; from.PlacedFootprint = layouts[level];
             D3D12_TEXTURE_COPY_LOCATION to{}; to.pResource = texture.Get(); to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            to.SubresourceIndex = static_cast<UINT>(level);
             commands->CopyTextureRegion(&to,0,0,0,&from,nullptr);
+            }
             Barrier(commands.Get(),texture.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            D3D12_SHADER_RESOURCE_VIEW_DESC view{}; view.Format = desc.Format; view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;
-            device_->CreateShaderResourceView(texture.Get(),&view,cpu); cpu.ptr += srvStride;
-            candidate->textures.push_back(std::move(texture)); uploads.push_back(std::move(upload));
+
+            candidate->textures[textureIndex * 2 + srgb] = std::move(texture); uploads.push_back(std::move(upload));
+        }
+        // 同じ画像でも色マップとData Mapで異なるSRVを使う。
+        for (const auto& material : asset.materials) {
+            const uint32_t maps[]{material.texture, material.metallicRoughnessMap.texture, material.normalMap.texture, material.occlusionMap.texture, material.emissiveMap.texture};
+            for (size_t i = 0; i < 5; ++i) {
+                D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+                view.Format = i == 0 || i == 4 ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+                view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D; view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = UINT(-1);
+                const auto textureIndex = maps[i] * 2 + ((i == 0 || i == 4) ? 1 : 0);
+                device_->CreateShaderResourceView(candidate->textures[textureIndex].Get(), &view, cpu); cpu.ptr += srvStride;
+            }
         }
         WriteShadowDescriptor(*candidate);
-        heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER; heap.NumDescriptors = static_cast<UINT>(asset.materials.size());
+        heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER; heap.NumDescriptors = 18;
         Check(device_->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&candidate->samplers)),"Create asset sampler heap");
         cpu = candidate->samplers->GetCPUDescriptorHandleForHeapStart();
         const auto samplerStride = device_->GetDescriptorHandleIncrementSize(heap.Type);
         constexpr D3D12_TEXTURE_ADDRESS_MODE wrap[]{D3D12_TEXTURE_ADDRESS_MODE_WRAP,D3D12_TEXTURE_ADDRESS_MODE_CLAMP,D3D12_TEXTURE_ADDRESS_MODE_MIRROR};
-        for (const auto& material : asset.materials) {
-            D3D12_SAMPLER_DESC sampler{}; sampler.Filter = material.nearest ? D3D12_FILTER_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-            sampler.AddressU = wrap[material.wrapU]; sampler.AddressV = wrap[material.wrapV]; sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        // Wrap U/Vの3通りとFilterの2通りを共有し、材質数でSampler Heapを増やさない。
+        for (UINT u = 0; u < 3; ++u) for (UINT v = 0; v < 3; ++v) for (UINT nearest = 0; nearest < 2; ++nearest) {
+            D3D12_SAMPLER_DESC sampler{};
+            sampler.Filter = nearest ? D3D12_FILTER_MIN_MAG_MIP_POINT : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+            sampler.AddressU = wrap[u]; sampler.AddressV = wrap[v]; sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
             sampler.MaxAnisotropy = 1; sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER; sampler.MaxLOD = D3D12_FLOAT32_MAX;
             device_->CreateSampler(&sampler,cpu); cpu.ptr += samplerStride;
         }
@@ -278,7 +336,29 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
     UINT64 paletteOffset = 0;
     auto& frame = frames_[frameIndex_];
     UINT64 materialOffset = shadowPass ? frame.materialCapacity / 2 : 0;
+    struct Submission { const DrawItem* item; size_t part; UINT64 palette; bool blend; float depth; };
+    std::vector<Submission> submissions;
     for (const auto& item : items) {
+        const auto& model = *meshes_[item.mesh.slot].model;
+        for (size_t p = 0; p < model.parts.size(); ++p) {
+            const auto slot = model.parts[p].material;
+            const auto surface = item.materials.empty() ? ImportedSurface(model.materials[slot]) : item.materials[slot];
+            if (shadowPass && (!surface.castShadow || surface.alphaBlend)) continue;
+            const auto point = XMVector3TransformCoord(XMLoadFloat3(&model.partCenters[p]), XMLoadFloat4x4(&item.world) * XMLoadFloat4x4(&view_));
+            submissions.push_back({&item, p, paletteOffset, surface.alphaBlend, XMVectorGetZ(point)});
+        }
+        if (!item.bones.empty()) {
+            std::memcpy(frame.bonesMapped + paletteOffset, item.bones.data(), item.bones.size_bytes());
+            std::memcpy(frame.bonesMapped + paletteOffset + 256 * 64, item.normals.data(), item.normals.size_bytes());
+            paletteOffset += 256 * 128;
+        }
+    }
+    if (!shadowPass) std::stable_sort(submissions.begin(), submissions.end(), [](const auto& a, const auto& b) {
+        if (a.blend != b.blend) return !a.blend;
+        return a.blend && a.depth > b.depth;
+    });
+    for (const auto& submission : submissions) {
+        const auto& item = *submission.item;
         const auto& model = *meshes_[item.mesh.slot].model;
         const bool skinned = !item.bones.empty();
         const auto world = XMLoadFloat4x4(&item.world);
@@ -286,9 +366,9 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
             XMFLOAT4X4 wvp, world, normalWorld;
             std::array<float, 4> color, options, emission, toon, shadow, lightDirection, lightColor, ambient;
             XMFLOAT4X4 lightViewProjection;
-            std::array<float, 4> shadowOptions, castShadowTint, shadowExtra;
+            std::array<float, 4> shadowOptions, castShadowTint, shadowExtra, pbr, camera, maps;
         } constants{};
-        static_assert(sizeof(Constants) == 432);
+        static_assert(sizeof(Constants) == 480);
         const auto vector4 = [](const std::array<float, 3>& v) { return std::array<float, 4>{v[0], v[1], v[2], 0}; };
         constants.lightDirection = vector4(settings.lighting.direction);
         constants.lightColor = vector4(settings.lighting.color);
@@ -304,18 +384,17 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
         ID3D12DescriptorHeap* heaps[]{model.srv.Get(), model.samplers.Get()};
         list_->SetDescriptorHeaps(2, heaps);
         auto shadowView = model.srv->GetGPUDescriptorHandleForHeapStart();
-        shadowView.ptr += model.textures.size() * srvStride;
+        shadowView.ptr += model.materials.size() * 5 * srvStride;
         list_->SetGraphicsRootDescriptorTable(4, shadowView);
         list_->IASetVertexBuffers(0, 1, &model.vb);
+        list_->IASetVertexBuffers(2, 1, &model.tangentView);
         list_->IASetIndexBuffer(&model.ib);
         if (skinned) {
-            std::memcpy(frame.bonesMapped + paletteOffset, item.bones.data(), item.bones.size_bytes());
-            std::memcpy(frame.bonesMapped + paletteOffset + 256 * 64, item.normals.data(), item.normals.size_bytes());
-            list_->SetGraphicsRootConstantBufferView(3, frame.bones->GetGPUVirtualAddress() + paletteOffset);
+            list_->SetGraphicsRootConstantBufferView(3, frame.bones->GetGPUVirtualAddress() + submission.palette);
             list_->IASetVertexBuffers(1, 1, &model.skinView);
-            paletteOffset += 256 * 128;
         }
-        for (const auto& part : model.parts) {
+        {
+            const auto& part = model.parts[submission.part];
             const auto& material = model.materials[part.material];
             const auto surface = item.materials.empty() ? ImportedSurface(material) : item.materials[part.material];
             if (shadowPass && !surface.castShadow) continue;
@@ -323,22 +402,33 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
                 1.0f / static_cast<float>(shadowResolution_), shadow.filterRadius};
             constants.color = surface.baseColor;
             constants.options = {surface.cutoff, surface.alphaMask ? 1.0f : 0.0f,
-                settings.unlit ? 1.0f : static_cast<float>(surface.shading), 0};
+                settings.unlit ? 1.0f : static_cast<float>(surface.shading), surface.alphaBlend ? 1.0f : 0.0f};
             constants.emission = vector4(surface.emission);
+            constants.emission[3] = material.emissiveMap.texture ? 1.0f : 0.0f;
+            constants.pbr = {surface.metallic, surface.roughness, surface.normalScale, surface.occlusionStrength};
+            const auto inverseView = XMMatrixInverse(nullptr, XMLoadFloat4x4(&view_));
+            XMFLOAT3 eye; XMStoreFloat3(&eye, inverseView.r[3]);
+            constants.camera = {eye.x, eye.y, eye.z, XMVectorGetX(XMMatrixDeterminant(world)) < 0 ? -1.0f : 1.0f};
+            constants.maps = {material.normalMap.texture ? 1.0f : 0.0f, model.hasTangents ? 1.0f : 0.0f, material.metallicRoughnessMap.texture ? 1.0f : 0.0f, material.occlusionMap.texture ? 1.0f : 0.0f};
             constants.toon = {surface.threshold, surface.softness, 0, 0};
             constants.shadow = vector4(surface.shadow);
             auto* pipeline = shadowPass ? (skinned ? shadowSkinPso_[surface.doubleSided].Get() : shadowMeshPso_[surface.doubleSided].Get()) :
-                (skinned ? skinPso_[surface.doubleSided].Get() : meshPso_[surface.doubleSided].Get());
+                (skinned ? skinPso_[surface.doubleSided + 2 * surface.alphaBlend].Get() : meshPso_[surface.doubleSided + 2 * surface.alphaBlend].Get());
             list_->SetPipelineState(pipeline);
             std::memcpy(frame.materialsMapped + materialOffset, &constants, sizeof(constants));
             list_->SetGraphicsRootConstantBufferView(0, frame.materialConstants->GetGPUVirtualAddress() + materialOffset);
             materialOffset += 512;
             auto texture = model.srv->GetGPUDescriptorHandleForHeapStart();
-            texture.ptr += UINT64(material.texture) * srvStride;
-            auto sampler = model.samplers->GetGPUDescriptorHandleForHeapStart();
-            sampler.ptr += UINT64(part.material) * samplerStride;
+            texture.ptr += UINT64(part.material) * 5 * srvStride;
             list_->SetGraphicsRootDescriptorTable(1, texture);
-            list_->SetGraphicsRootDescriptorTable(2, sampler);
+            const TextureBinding maps[]{{material.texture, material.wrapU, material.wrapV, material.nearest}, material.metallicRoughnessMap,
+                material.normalMap, material.occlusionMap, material.emissiveMap};
+            for (UINT i = 0; i < 5; ++i) {
+                const auto& map = maps[i];
+                auto sampler = model.samplers->GetGPUDescriptorHandleForHeapStart();
+                sampler.ptr += UINT64((map.wrapU * 3 + map.wrapV) * 2 + map.nearest) * samplerStride;
+                list_->SetGraphicsRootDescriptorTable(i == 0 ? 2 : i + 4, sampler);
+            }
             list_->DrawIndexedInstanced(part.indexCount, 1, part.firstIndex, 0, 0);
         }
     }
@@ -379,7 +469,7 @@ size_t Renderer::MaterialUseCount(MeshHandle mesh, uint32_t slot) const {
 }
 void Renderer::WriteShadowDescriptor(GpuModel& model) {
     auto handle = model.srv->GetCPUDescriptorHandleForHeapStart();
-    handle.ptr += model.textures.size() * device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    handle.ptr += model.materials.size() * 5 * device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_SHADER_RESOURCE_VIEW_DESC view{};
     view.Format = DXGI_FORMAT_R32_FLOAT; view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;

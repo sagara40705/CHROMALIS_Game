@@ -4,11 +4,11 @@ Windows x64 / C++20 / DirectX 12 のゲーム本体とRuntimeです。静的モ�
 アセット制作時は[制作・納品フォーマット](docs/asset-authoring.md)を参照してください。
 このリポジトリだけでビルドでき、EditorやDear ImGuiの取得・ビルドは不要です。
 
-平面上のプレイヤー移動・待機/歩行/走行・追従カメラのデモは[player-demo.md](docs/player-demo.md)を参照。
+Scene設定による平面移動・待機/歩行/走行・追従カメラは[scene-playback.md](docs/scene-playback.md)を参照。専用デモexeを切り替えず、同じGameの--sceneで実行します。
 
 骨格/VFXの制作・実行手順、採用版、対応範囲、色・寿命の契約は[docs/animation-vfx.md](docs/animation-vfx.md)。
 
-配置・親子Transform・保存/読み込み・複数個体の所有権は[docs/scene.md](docs/scene.md)。`--scene assets/Scenes/Example.cscene`で共通Sceneを読み込めます（初回は記載の準備スクリプトを実行）。
+配置・親子Transform・保存/読み込み・複数個体の所有権は[docs/scene.md](docs/scene.md)。`--scene samples/Scenes/Example.cscene`で共通Sceneを読み込めます（初回は記載の準備スクリプトを実行）。
 
 ## 必要環境
 
@@ -39,7 +39,7 @@ WARPの結果はhardware性能の測定ではありません。
 リポジトリ直下からモデルを変換・表示:
 
 ```powershell
-& .\out\build\vs2026\Debug\ChromalisAssetCooker.exe assets/Cube/Cube.gltf out/cooked/Cube.cmesh --id samples/cube
+& .\out\build\vs2026\Debug\ChromalisAssetCooker.exe samples/Assets/Cube/Cube.gltf out/cooked/Cube.cmesh --id samples/cube
 & .\out\build\vs2026\Debug\ChromalisGame.exe --asset out/cooked/Cube.cmesh --asset2 out/cooked/Cube.cmesh
 ```
 
@@ -49,7 +49,7 @@ WARPの結果はhardware性能の測定ではありません。
 
 CTestにはCPU変換/不正データ試験、外部CC0 Cube、四色テクスチャによるUV/カリング/深度/カメラ/ワールド変換、変更モデルを再読み込み後に不正データを拒否して画素を保持する試験を含みます。`--asset-check` / `--asset-update` は生成された専用テストモデル用です。
 
-対応形式・保存形式・所有権・制限: [docs/static-assets.md](docs/static-assets.md)。同梱モデルの出典: [assets/Cube/README.md](assets/Cube/README.md)。
+対応形式・保存形式・所有権・制限: [docs/static-assets.md](docs/static-assets.md)。同梱モデルの出典: [samples/Assets/Cube/README.md](samples/Assets/Cube/README.md)。
 
 - WASD / 矢印: 三角形を移動。Space: 位置をリセット。Esc: 終了。
 - ログは実行ファイルの隣の `logs/` に保存します。`--log file.log` で変更できます。
@@ -67,7 +67,7 @@ CTestにはCPU変換/不正データ試験、外部CC0 Cube、四色テクスチ
 - `src/runtime/`: Win32、DirectX 12、入力、ログ、診断。
 - `src/assets/`: CPU用の版付きcmesh形式、読み込みと検証。
 - `src/cooker/`: cgltf/WICを使うオフライン変換。
-- `src/tests/`: 外部モデルと生成fixtureの検証。
+- `tests/`: 外部モデルと生成fixtureの検証。
 - `shaders/Mesh.hlsl`: テクスチャ・材質・深度付き静的モデル表示。
 - `shaders/Triangle.hlsl`: DXCでビルド時にコンパイルする診断用シェーダー。
 - `app.manifest`: DPI設定。

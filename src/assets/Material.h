@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 namespace chromalis {
-enum class ShadingModel { Lit, Unlit, Toon };
+enum class ShadingModel { Lit, Unlit, Toon, Pbr };
 // テクスチャとSamplerはモデル側に残し、共有可能な見た目の値だけを保持する。
 struct MaterialSurface {
     std::array<float, 4> baseColor{1, 1, 1, 1};
@@ -12,6 +12,8 @@ struct MaterialSurface {
     ShadingModel shading = ShadingModel::Lit;
     float cutoff = 0.5f, threshold = 0.5f, softness = 0.05f;
     bool alphaMask = false, doubleSided = false;
+    bool alphaBlend = false;
+    float metallic = 1, roughness = 1, normalScale = 1, occlusionStrength = 1;
     bool castShadow = true, receiveShadow = true;
     bool operator==(const MaterialSurface&) const = default;
 };
@@ -30,8 +32,12 @@ struct SceneLighting {
 inline MaterialSurface ImportedSurface(const MeshMaterial& source) {
     MaterialSurface result;
     result.baseColor = source.baseColor;
-    result.shading = source.unlit ? ShadingModel::Unlit : ShadingModel::Lit;
+    result.shading = source.unlit ? ShadingModel::Unlit : source.pbr ? ShadingModel::Pbr : ShadingModel::Lit;
     result.cutoff = source.cutoff;
+    result.alphaBlend = source.alphaBlend != 0;
+    result.metallic = source.metallic; result.roughness = source.roughness;
+    result.normalScale = source.normalScale; result.occlusionStrength = source.occlusionStrength;
+    result.emission = source.emissive;
     result.alphaMask = source.alphaMask != 0;
     result.doubleSided = source.doubleSided != 0;
     return result;
@@ -41,8 +47,12 @@ template<size_t N> inline void ValidateColor(const std::array<float, N>& value, 
         if (!std::isfinite(channel) || channel < 0 || channel > maximum) throw std::runtime_error("Invalid linear material/light color");
 }
 inline void ValidateMaterial(const MaterialSurface& value) {
+    if (value.alphaMask && value.alphaBlend) throw std::runtime_error("Conflicting alpha modes");
+    for (float f : {value.metallic, value.roughness, value.occlusionStrength})
+        if (!std::isfinite(f) || f < 0 || f > 1) throw std::runtime_error("Invalid PBR factor");
+    if (!std::isfinite(value.normalScale) || value.normalScale < 0 || value.normalScale > 16) throw std::runtime_error("Invalid normal scale");
     ValidateColor(value.baseColor, 1); ValidateColor(value.emission, 64); ValidateColor(value.shadow, 1);
-    if (value.shading != ShadingModel::Lit && value.shading != ShadingModel::Unlit && value.shading != ShadingModel::Toon)
+    if (value.shading != ShadingModel::Lit && value.shading != ShadingModel::Unlit && value.shading != ShadingModel::Toon && value.shading != ShadingModel::Pbr)
         throw std::runtime_error("Unknown shading model");
     if (!std::isfinite(value.cutoff) || value.cutoff < 0 || !std::isfinite(value.threshold) || value.threshold < 0 || value.threshold > 1 ||
         !std::isfinite(value.softness) || value.softness < 0.0001f || value.softness > 0.5f)

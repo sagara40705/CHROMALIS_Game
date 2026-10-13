@@ -76,6 +76,10 @@ void Persistence(const std::filesystem::path& root) {
     scene.view.lighting.shadow.enabled = true; scene.view.lighting.shadow.resolution = 2048;
     scene.view.lighting.shadow.tint = {0.2f, 0.3f, 0.4f};
     scene.materials[0].surface.castShadow = false; scene.materials[0].surface.receiveShadow = false;
+    scene.materials[0].surface.shading = ShadingModel::Pbr;
+    scene.materials[0].surface.alphaBlend = true; scene.materials[0].surface.alphaMask = false;
+    scene.materials[0].surface.metallic = 0.3f; scene.materials[0].surface.roughness = 0.7f;
+    scene.materials[0].surface.normalScale = 0.6f; scene.materials[0].surface.occlusionStrength = 0.2f;
     surface = scene.materials[0].surface;
     const auto path = root / L"シーン.cscene";
     SaveScene(scene, path);
@@ -122,7 +126,7 @@ void Persistence(const std::filesystem::path& root) {
     std::filesystem::remove(alias);
     Reject([&] { SaveScene(scene, root / "texture.png"); });
     auto malformed = bytes;
-    const auto version = malformed.find("\"version\": 4");
+    const auto version = malformed.find("\"version\": 6");
     Require(version != std::string::npos, "Missing schema version");
     malformed.replace(version, 12, "\"version\": 9");
     { std::ofstream file(root / "bad.cscene"); file << malformed; }
@@ -131,12 +135,37 @@ void Persistence(const std::filesystem::path& root) {
     Require(scene.Entity(effect).effect.follow == 0 && scene.Entity(effect).effect.joint.empty(), "Dangling socket after delete");
 }
 }
+// Scene v5の実行設定と、参照先を消した場合の復旧を検証する。
+void PlaySettings(const std::filesystem::path& root) {
+    SceneDocument scene;
+    scene.assets.push_back({"character", SceneAssetKind::Skeletal, root / "Character.cskin"});
+    const auto id = scene.Add("Any name"); scene.Entity(id).asset = "character";
+    scene.play.player = scene.play.cameraTarget = id;
+    scene.play.walkSpeed = 2; scene.play.runSpeed = 4; scene.play.fixedTarget = {1,2,3};
+    SaveScene(scene, root / "Play.cscene");
+    const auto loaded = LoadScene(root / "Play.cscene");
+    Require(loaded.play.player == id && loaded.play.cameraTarget == id && loaded.play.walkSpeed == 2 &&
+        loaded.play.runSpeed == 4 && loaded.play.fixedTarget == scene.play.fixedTarget && loaded.play.clips == scene.play.clips, "Play settings roundtrip");
+    auto bad = scene; bad.play.player = 900;
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.play.cameraTarget = 900;
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.play.runSpeed = -1;
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.play.minimum = bad.play.maximum;
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.play.cameraHeight = std::numeric_limits<float>::quiet_NaN();
+    Reject([&] { ValidateScene(bad); });
+    scene.DeleteSubtree(id);
+    Require(!scene.play.player && !scene.play.cameraTarget, "Dangling Play reference after delete");
+    ValidateScene(scene);
+}
 int wmain(int argc, wchar_t** argv) {
     try {
         Require(argc == 2, "Expected test output directory");
         const auto root = std::filesystem::absolute(argv[1]);
         std::filesystem::create_directories(root);
-        Hierarchy(); Persistence(root);
+        Hierarchy(); Persistence(root); PlaySettings(root);
         std::cout << "PASS: hierarchy, IDs, invalid transforms, socket dependency, atomic persistence, relative paths\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

@@ -57,6 +57,8 @@ void SceneDocument::DeleteSubtree(EntityId id) {
         if (removed.contains(entity.parent)) removed.insert(entity.id);
     }
     std::erase_if(entities, [&](const auto& entity) { return removed.contains(entity.id); });
+    if (removed.contains(play.player)) play.player = 0;
+    if (removed.contains(play.cameraTarget)) play.cameraTarget = 0;
     for (auto& entity : entities) {
         if (removed.contains(entity.effect.follow)) {
             entity.effect.follow = 0;
@@ -127,6 +129,22 @@ void ValidateTransform(const Transform& transform) {
     for (float value : transform.scale) Require(value > 0, "Scene scale must be positive");
 }
 void ValidateScene(const SceneDocument& document) {
+    const auto& play = document.play;
+    Finite(play.minimum); Finite(play.maximum); Finite(play.fixedTarget);
+    Require(std::isfinite(play.walkSpeed) && play.walkSpeed > 0 && play.walkSpeed <= 100 &&
+        std::isfinite(play.runSpeed) && play.runSpeed >= play.walkSpeed && play.runSpeed <= 100 &&
+        std::isfinite(play.turnSpeed) && play.turnSpeed > 0 && play.turnSpeed <= 100 &&
+        std::isfinite(play.forwardYaw) && std::isfinite(play.groundHeight) &&
+        std::isfinite(play.cameraHeight) && std::isfinite(play.cameraFollow) && play.cameraFollow > 0 && play.cameraFollow <= 100,
+        "Invalid Scene play speeds/plane/camera");
+    Require(play.minimum[0] < play.maximum[0] && play.minimum[1] < play.maximum[1], "Invalid movement bounds");
+    if (play.player) {
+        const auto& player = document.Entity(play.player);
+        Require(!player.parent && !player.asset.empty() && document.Asset(player.asset).kind == SceneAssetKind::Skeletal,
+            "Controlled player must be a root skeletal object");
+        for (const auto& clip : play.clips) Require(!clip.empty() && clip.size() <= 256, "Invalid locomotion clip name");
+    }
+    if (play.cameraTarget) (void)document.Entity(play.cameraTarget);
     ValidateLighting(document.view.lighting);
     Require(document.materials.size() <= 4096, "Scene exceeds 4096 material definitions");
     std::unordered_set<std::string> materialIds;

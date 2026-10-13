@@ -6,11 +6,7 @@
 
 Developmentルートから実行する。
 
-```powershell
-cmake --build --preset debug --parallel 2 -- /nodeReuse:false
-powershell -NoProfile -ExecutionPolicy Bypass -File Game/assets/Scenes/Prepare.ps1 -Cooker out/build/vs2026/Debug/ChromalisAssetCooker.exe
-& out/build/vs2026/Debug/ChromalisEditor.exe --scene Game/assets/Scenes/Shadows.cscene
-```
+DevelopmentのEditorを`--workspace Content/Workspace.json`で通常起動し、Workspace scenesで対応するMaterials / Shadows / SharedAnimationを選ぶ。アセットは必要に応じて自動変換される。
 
 1. Camera / backgroundでLight direction、Light、Ambientを調整する。方向はWorld空間でサーフェスから光源へ向かう向き。鉛直の光も扱う。
 2. Directional shadowを開き、Enabledを有効にする。Shadow centerを対象の中心へ置き、Coverage width/depthで対象を覆う。幅は正方形の直交投影幅、奥行きは光軸方向の範囲。中心はWorld固定で、カメラには追従しない。

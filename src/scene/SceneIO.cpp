@@ -46,8 +46,13 @@ bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 Json Encode(const SceneDocument& document, const std::filesystem::path& destination) {
-    Json root{{"version", 4}, {"nextId", std::to_string(document.nextId)}};
+    Json root{{"version", 6}, {"nextId", std::to_string(document.nextId)}};
     const auto& view = document.view;
+    const auto& p = document.play;
+    root["play"] = {{"player", std::to_string(p.player)}, {"cameraTarget", std::to_string(p.cameraTarget)},
+        {"walkSpeed", p.walkSpeed}, {"runSpeed", p.runSpeed}, {"turnSpeed", p.turnSpeed},
+        {"forwardYaw", p.forwardYaw}, {"groundHeight", p.groundHeight}, {"minimum", p.minimum}, {"maximum", p.maximum},
+        {"clips", p.clips}, {"fixedTarget", p.fixedTarget}, {"cameraHeight", p.cameraHeight}, {"cameraFollow", p.cameraFollow}};
     root["view"] = {{"background", view.background}, {"yaw", view.yaw}, {"pitch", view.pitch}, {"distance", view.distance}, {"unlit", view.unlit}};
     root["view"]["lighting"] = {{"direction", view.lighting.direction}, {"color", view.lighting.color}, {"ambient", view.lighting.ambient}};
     const auto& shadow = view.lighting.shadow;
@@ -58,7 +63,8 @@ Json Encode(const SceneDocument& document, const std::filesystem::path& destinat
     for (const auto& material : document.materials) {
         const auto& m = material.surface;
         root["materials"].push_back({{"id", material.id}, {"baseColor", m.baseColor}, {"emission", m.emission}, {"shadow", m.shadow},
-            {"shading", m.shading == ShadingModel::Lit ? "lit" : m.shading == ShadingModel::Unlit ? "unlit" : "toon"},
+            {"shading", m.shading == ShadingModel::Lit ? "lit" : m.shading == ShadingModel::Unlit ? "unlit" : m.shading == ShadingModel::Pbr ? "pbr" : "toon"},
+            {"alphaBlend", m.alphaBlend}, {"metallic", m.metallic}, {"roughness", m.roughness}, {"normalScale", m.normalScale}, {"occlusionStrength", m.occlusionStrength},
             {"cutoff", m.cutoff}, {"threshold", m.threshold}, {"softness", m.softness}, {"alphaMask", m.alphaMask}, {"doubleSided", m.doubleSided},
             {"castShadow", m.castShadow}, {"receiveShadow", m.receiveShadow}});
     }
@@ -93,20 +99,29 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open scene");
         const auto root = Json::parse(stream);
-        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4) throw std::runtime_error("Unsupported scene version");
+        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4 && root.at("version") != 5 && root.at("version") != 6) throw std::runtime_error("Unsupported scene version");
         SceneDocument document;
         document.nextId = Id(root.at("nextId"));
+        if (root.at("version") >= 5) {
+            const auto& value = root.at("play"); auto& p = document.play;
+            p.player = Id(value.at("player")); p.cameraTarget = Id(value.at("cameraTarget"));
+            p.walkSpeed = value.at("walkSpeed"); p.runSpeed = value.at("runSpeed"); p.turnSpeed = value.at("turnSpeed");
+            p.forwardYaw = value.at("forwardYaw"); p.groundHeight = value.at("groundHeight");
+            p.minimum = value.at("minimum").get<std::array<float, 2>>(); p.maximum = value.at("maximum").get<std::array<float, 2>>();
+            p.clips = value.at("clips").get<std::array<std::string, 3>>(); p.fixedTarget = value.at("fixedTarget").get<std::array<float, 3>>();
+            p.cameraHeight = value.at("cameraHeight"); p.cameraFollow = value.at("cameraFollow");
+        }
         const auto& view = root.at("view");
         document.view.background = view.at("background").get<std::array<float, 4>>();
         document.view.yaw = view.at("yaw").get<float>();
         document.view.pitch = view.at("pitch").get<float>();
         document.view.distance = view.at("distance").get<float>();
         document.view.unlit = view.at("unlit").get<bool>();
-        if (root.at("version") == 3 || root.at("version") == 4) {
+        if (root.at("version") >= 3) {
             const auto& lighting = view.at("lighting");
             document.view.lighting = {lighting.at("direction").get<std::array<float, 3>>(),
                 lighting.at("color").get<std::array<float, 3>>(), lighting.at("ambient").get<std::array<float, 3>>()};
-            if (root.at("version") == 4) {
+            if (root.at("version") >= 4) {
                 const auto& s = lighting.at("shadow");
                 auto& shadow = document.view.lighting.shadow;
                 shadow.enabled = s.at("enabled");
@@ -126,11 +141,15 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
                 m.emission = value.at("emission").get<std::array<float, 3>>();
                 m.shadow = value.at("shadow").get<std::array<float, 3>>();
                 const auto shading = value.at("shading").get<std::string>();
-                if (shading != "lit" && shading != "unlit" && shading != "toon") throw std::runtime_error("Unknown shading model");
-                m.shading = shading == "lit" ? ShadingModel::Lit : shading == "unlit" ? ShadingModel::Unlit : ShadingModel::Toon;
+                if (shading != "lit" && shading != "unlit" && shading != "toon" && shading != "pbr") throw std::runtime_error("Unknown shading model");
+                m.shading = shading == "lit" ? ShadingModel::Lit : shading == "unlit" ? ShadingModel::Unlit : shading == "pbr" ? ShadingModel::Pbr : ShadingModel::Toon;
                 m.cutoff = value.at("cutoff"); m.threshold = value.at("threshold"); m.softness = value.at("softness");
+                if (root.at("version") >= 6) {
+                    m.alphaBlend = value.at("alphaBlend"); m.metallic = value.at("metallic"); m.roughness = value.at("roughness");
+                    m.normalScale = value.at("normalScale"); m.occlusionStrength = value.at("occlusionStrength");
+                }
                 m.alphaMask = value.at("alphaMask"); m.doubleSided = value.at("doubleSided");
-                if (root.at("version") == 4) { m.castShadow = value.at("castShadow"); m.receiveShadow = value.at("receiveShadow"); }
+                if (root.at("version") >= 4) { m.castShadow = value.at("castShadow"); m.receiveShadow = value.at("receiveShadow"); }
                 document.materials.push_back(std::move(material));
             }
         }
@@ -156,7 +175,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
                 a.at("loop").get<bool>(), a.at("autoplay").get<bool>(), a.at("restPose").get<bool>(), a.at("bindPose").get<bool>(), a.value("library", std::string{})};
             const auto& e = value.at("effect");
             entity.effect = {e.at("count").get<int>(), e.at("autoplay").get<bool>(), Id(e.at("follow")), e.at("joint").get<std::string>()};
-            if (root.at("version") == 3 || root.at("version") == 4) {
+            if (root.at("version") >= 3) {
                 const auto& bindings = value.at("materials");
                 if (!bindings.is_array() || bindings.size() > 4096) throw std::runtime_error("Invalid material bindings");
                 for (const auto& binding : bindings) {

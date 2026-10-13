@@ -1,6 +1,6 @@
 # Phase 0B static asset contract
 
-Scene導入後の所有権・複数モデル配置・描画リストは[scene.md](scene.md)を正とする。以下の2スロット記述は0B時点のプレビューで、現在は旧CLI互換設定だけに残る。静的ファイル形式は変更していない。
+Scene導入後の所有権・複数モデル配置・描画リストは[scene.md](scene.md)を正とする。以下の2スロット記述は0B時点のプレビューで、現在は旧CLI互換設定だけに残る。現在の材質契約は[materials.md](materials.md)を参照する。cmeshはv2へ更新し、v1の読み込みも維持する。
 
 ## Responsibilities
 
@@ -12,11 +12,11 @@ cgltf is small, C-based and covers the required accessors, buffers and node stru
 
 - glTF/GLB default scene (first scene if no default), static node hierarchy, multiple triangle primitives and materials. Node transforms are baked into vertices.
 - Indexed or non-indexed triangle lists; u8/u16/u32 indices. Interleaved, normalized and sparse floating-point attributes are unpacked by cgltf. Sparse indices are rejected.
-- POSITION, NORMAL, TEXCOORD_0. Missing normals produce split flat-shaded corners; missing UV is allowed only without a base-color texture.
+- POSITION, NORMAL, TEXCOORD_0, optional TANGENT. Missing normals produce split flat-shaded corners; missing UV is allowed only without material maps.
 - External relative buffers/images, embedded GLB images and base64 data URIs. Local dependencies must remain under the source directory. No network URI or path escape.
-- PNG/JPEG decoded to straight RGBA8. Base-color texture/factor, repeat/clamp/mirror, nearest/linear (chosen from magFilter), opaque/mask, double-sided, KHR_materials_unlit. Metallic/roughness scalar values are retained but not evaluated by the preview shader.
+- PNG/JPEG decoded to straight RGBA8. Base-color texture/factor, repeat/clamp/mirror, nearest/linear (chosen from magFilter), opaque/mask/blend, double-sided, KHR_materials_unlit, Metallic/Roughness factors/maps, Normal, Occlusion and Emissive maps.
 
-Skinning, animations, morph targets, Draco primitives, non-triangle primitives, alpha BLEND, texture transforms, nonzero base-color UV sets and unsupported required extensions (including meshopt) fail with a diagnostic. Optional meshopt decoding is not performed; only standard fallback buffer data can be used. Optional extra PBR maps/extensions and vertex colors are not evaluated; the success report explicitly states the base-color-only preview limitation. This is not a full glTF PBR renderer. Texture minification currently follows the same nearest/linear choice as magnification; there are no mips, GPU compression, streaming or color-profile conversion. Source base-color images follow glTF's sRGB contract.
+Skinning, animations, morph targets, Draco primitives, non-triangle primitives, texture transforms, nonzero base-color UV sets and unsupported required extensions (including meshopt) fail with a diagnostic. Optional meshopt decoding is not performed; only standard fallback buffer data can be used. Optional material extensions and vertex colors are not evaluated. Core PBR maps are evaluated; see the current material contract. This is not a full glTF PBR renderer. Texture minification currently follows the same nearest/linear choice as magnification; color-space-aware mips are generated during upload; GPU compression, streaming and color-profile conversion remain unsupported. Source base-color images follow glTF's sRGB contract.
 
 ## Coordinates, color and drawing
 
@@ -26,13 +26,13 @@ Node invertibility is checked using the determinant of unit-length basis vectors
 
 `alphaCutoff` is finite and nonnegative with no upper bound of 1. It is retained exactly as a float, including values greater than 1: MASK then discards every fragment with glTF alpha in [0,1]. Metallic/roughness still require [0,1].
 
-Base-color texture SRVs are sRGB and factors/lighting are linear. Phase 0C moves output encoding from the mesh shader to an R8G8B8A8_UNORM_SRGB RTV on the existing SDR UNORM swap chain, allowing linear VFX blending. Opaque output and cutout masks only. The 0A diagnostic triangle and ImGui remain display-color paths. Preview lighting is a single simple directional term with an unlit toggle, without shadows or PBR. See [animation-vfx.md](animation-vfx.md) for the current rendering contract.
+Base-color texture SRVs are sRGB and factors/lighting are linear. Phase 0C moves output encoding from the mesh shader to an R8G8B8A8_UNORM_SRGB RTV on the existing SDR UNORM swap chain, allowing linear VFX blending. Opaque, cutout and sorted straight-alpha mesh output. The 0A diagnostic triangle and ImGui remain display-color paths. Current rendering supports diffuse/Toon/Unlit/PBR and directional shadows. See [animation-vfx.md](animation-vfx.md) for the current rendering contract.
 
 Two independently transformed preview slots exercise multiple model drawing. They are a 0B host/UI limit, not a future world/entity design. A model contains all its primitive/material bindings.
 
 ## Cooked file and regeneration
 
-`.cmesh` is one bounded binary package: `CHRMESH\0` magic, uint32 version **1**, stable ASCII asset ID, dependency metadata, vertices, uint32 indices, primitive ranges, materials and RGBA8 images. Integers and IEEE754 floats are explicitly serialized little endian. Count prefixes precede arrays; strings are UTF-8 bytes with uint32 lengths. The material record is 56 bytes. No ABI struct dumps or GPU pointers are saved. Unknown versions, truncated/trailing data, nonfinite values, invalid counts/ranges and invalid references are rejected before GPU allocation.
+`.cmesh` is one bounded binary package: `CHRMESH\0` magic, uint32 version **2** (v1 readable), stable ASCII asset ID, dependency metadata, vertices, uint32 indices, primitive ranges, materials and RGBA8 images. Integers and IEEE754 floats are explicitly serialized little endian. Count prefixes precede arrays; strings are UTF-8 bytes with uint32 lengths. The v1 material record is 56 bytes; v2 adds PBR/Blend flags, four map bindings, emission/normal/AO factors, and a trailing tangent array. See StaticAsset.cpp for the explicit layout. No ABI struct dumps or GPU pointers are saved. Unknown versions, truncated/trailing data, nonfinite values, invalid counts/ranges and invalid references are rejected before GPU allocation.
 
 The recipe and every external source dependency have SHA256 metadata. Embedded data is covered by its containing source hash. Explicit recook always rebuilds; there is no implicit timestamp cache or watcher. Change a source/dependency or Cooker recipe → recook with the same asset ID → reload. Changes to format require a new version and recook, not speculative migration APIs. Runtime does not reread source hashes or need source files.
 
