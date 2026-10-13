@@ -56,6 +56,8 @@ CTestにはCPU変換/不正データ試験、外部CC0 Cube、四色テクスチ
 
 ## ファイル構成
 
+共通Skeleton・Clipの制作と再利用は[shared-animation.md](docs/shared-animation.md)を参照。
+
 - `Main.cpp`: Game host。
 - `src/runtime/`: Win32、DirectX 12、入力、ログ、診断。
 - `src/assets/`: CPU用の版付きcmesh形式、読み込みと検証。

@@ -21,15 +21,21 @@ int wmain(int argc, wchar_t** argv) {
     try {
         if ((argc != 5 && argc != 7) || std::wstring_view(argv[3]) != L"--id" ||
             (argc == 7 && (std::wstring_view(argv[5]) != L"--report" || !*argv[6])))
-            throw std::runtime_error("Usage: ChromalisAssetCooker source.gltf|glb output.cmesh|cskin --id stable/id [--report report.txt]");
+            throw std::runtime_error("Usage: ChromalisAssetCooker source.gltf|glb output.cmesh|cskin|canim --id stable/id [--report report.txt]");
         if (argc == 7) report = argv[6];
         const auto id8 = std::filesystem::path(argv[4]).u8string();
         // Until import succeeds the dependency set is unknown. Errors go only to stdout.
         const std::string id(reinterpret_cast<const char*>(id8.data()), id8.size());
-        const bool skinned=std::filesystem::path(argv[2]).extension()==L".cskin";
+        const auto extension = std::filesystem::path(argv[2]).extension();
+        const bool skinned = extension == L".cskin", animation = extension == L".canim";
+        if (!skinned && !animation && extension != L".cmesh") throw std::runtime_error("Output must be .cmesh, .cskin or .canim");
         chromalis::SkeletalAsset skin;
+        chromalis::AnimationLibrary library;
+        if (animation) library = chromalis::CookAnimation(argv[1], id);
         if(skinned)skin=chromalis::CookSkeletal(argv[1],id);
-        auto a = skinned?skin.mesh:chromalis::CookStatic(argv[1],id);
+        chromalis::StaticAsset a;
+        if (animation) { a.id = library.id; a.dependencies = library.dependencies; }
+        else a = skinned ? skin.mesh : chromalis::CookStatic(argv[1],id);
         const auto output = std::filesystem::weakly_canonical(argv[2]);
         const auto sourceDirectory = std::filesystem::canonical(argv[1]).parent_path();
         if (!report.empty() && SameFile(output, report))
@@ -47,9 +53,11 @@ int wmain(int argc, wchar_t** argv) {
             handle.value = CreateFileW(report.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (handle.value == INVALID_HANDLE_VALUE) throw std::runtime_error("Cannot open validated report path");
         }
-        if(skinned)chromalis::SaveSkeletalAsset(skin,argv[2]);
+        if (animation) chromalis::SaveAnimationLibrary(library, argv[2]);
+        else if(skinned)chromalis::SaveSkeletalAsset(skin,argv[2]);
         else chromalis::SaveStaticAsset(a, argv[2]);
-        const auto message = "Cook OK: " + a.id + " | vertices=" + std::to_string(a.vertices.size()) + " indices=" + std::to_string(a.indices.size()) + " parts=" + std::to_string(a.parts.size()) + " textures=" + std::to_string(a.textures.size()) + " | base-color preview; PBR lighting/maps, mipmaps and vertex colors are not evaluated in 0B";
+        const auto message = animation ? "Cook OK: " + library.id + " | joints=" + std::to_string(library.joints.size()) + " clips=" + std::to_string(library.clips.size()) :
+            "Cook OK: " + a.id + " | vertices=" + std::to_string(a.vertices.size()) + " indices=" + std::to_string(a.indices.size()) + " parts=" + std::to_string(a.parts.size()) + " textures=" + std::to_string(a.textures.size()) + " | base-color preview; PBR lighting/maps, mipmaps and vertex colors are not evaluated in 0B";
         if (handle.value != INVALID_HANDLE_VALUE) {
             const auto line = message + '\n'; DWORD written = 0;
             if (!WriteFile(handle.value,line.data(),static_cast<DWORD>(line.size()),&written,nullptr) || written != line.size() || !SetEndOfFile(handle.value))

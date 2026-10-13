@@ -92,6 +92,20 @@ try {
         if ($LASTEXITCODE -ne 1 -or "$message" -notmatch 'Cook FAILED:' -or "$message" -match 'Cook OK:') { throw 'Editor lost error / displayed stale success' }
         Unchanged $dir $before
     }
-    Write-Output 'PASS: CLI collision/parse/dependency/argument failures preserve copies; exit codes and report success checked; optional Editor pipe checked'
+    # 共通アニメーション出力でも、検証前に原本や旧出力を変更しない。
+    $dir = Join-Path $run 'animation'
+    [IO.Directory]::CreateDirectory($dir) | Out-Null
+    [IO.File]::Copy((Join-Path $Source '../RiggedFigure/RiggedFigure.glb'), (Join-Path $dir 'source.glb'))
+    [IO.File]::WriteAllText((Join-Path $dir 'result.canim'), 'previous animation')
+    New-Item -ItemType HardLink -Path (Join-Path $dir 'alias.txt') -Target (Join-Path $dir 'source.glb') | Out-Null
+    foreach ($target in @('source.glb', 'result.canim', 'alias.txt')) {
+        Rejected $dir 'result.canim' $target 'source.glb'
+    }
+    $original = FileHash (Join-Path $dir 'source.glb')
+    & $Cooker (Join-Path $dir 'source.glb') (Join-Path $dir 'result.canim') --id tests/common --report (Join-Path $dir 'report.txt') | Out-Null
+    if ($LASTEXITCODE -ne 0 -or (FileHash (Join-Path $dir 'source.glb')) -ne $original) { throw 'Animation cook failed or damaged source' }
+    [IO.File]::WriteAllText((Join-Path $dir 'source.glb'), 'invalid')
+    Rejected $dir 'result.canim' 'unverified.txt' 'source.glb'
+    Write-Output 'PASS: CLI collision/parse/dependency/argument failures preserve copies; animation output/report protected; optional Editor pipe checked'
     exit 0
 } catch { Write-Error $_; exit 1 }

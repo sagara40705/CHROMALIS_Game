@@ -126,7 +126,7 @@ XMMATRIX NormalTransform(FXMMATRIX world, bool& mirrored) {
     return XMLoadFloat4x4(&normal);
 }
 }
-static StaticAsset CookModel(const std::filesystem::path& source, const std::string& id, SkeletalAsset* skeletal) {
+static StaticAsset CookModel(const std::filesystem::path& source, const std::string& id, SkeletalAsset* skeletal, bool animationOnly = false) {
     const auto absolute = std::filesystem::canonical(source);
     auto extension = absolute.extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
@@ -135,7 +135,7 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
     const auto bytes = ReadAssetBytes(absolute);
     const auto name = absolute.filename().u8string();
     imp.asset.dependencies.push_back({std::string(reinterpret_cast<const char*>(name.data()), name.size()), Hash(bytes)});
-    const auto recipe = skeletal ? SkeletalCookRecipe : StaticCookRecipe;
+    const auto recipe = animationOnly ? AnimationCookRecipe : skeletal ? SkeletalCookRecipe : StaticCookRecipe;
     imp.asset.dependencies.push_back({"@recipe", Hash({reinterpret_cast<const uint8_t*>(recipe.data()), recipe.size()})});
     cgltf_options options{}; cgltf_data* raw = nullptr;
     const auto parsed = cgltf_parse(&options, bytes.data(), bytes.size(), &raw);
@@ -155,7 +155,8 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
     }
     Need(cgltf_validate(data.get()) == cgltf_result_success, "glTF validation failed: accessor/buffer/node reference or size is invalid");
     if (skeletal) {
-        Need(data->nodes_count && data->nodes_count<=256 && data->skins_count==1 && data->animations_count && data->animations_count<=64,"0C requires one skin, 1..256 nodes and 1..64 clips");
+        Need(data->nodes_count && data->nodes_count<=256 && (animationOnly ? data->skins_count<=1 : data->skins_count==1) && data->animations_count<=64,
+            "Skeletal import requires 1..256 nodes, at most 64 clips, and one skin (optional for animation-only)");
         std::vector<uint32_t> remap(data->nodes_count,UINT32_MAX);
         std::function<void(const cgltf_node*,int32_t,size_t)> skeletonVisit;
         skeletonVisit=[&](const cgltf_node* n,int32_t parent,size_t depth) {
@@ -180,6 +181,7 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
         };
         for(size_t n=0;n<data->nodes_count;++n)if(!data->nodes[n].parent)skeletonVisit(&data->nodes[n],-1,0);
         Need(skeletal->joints.size()==data->nodes_count,"Disconnected/cyclic skeleton");
+        if (data->skins_count) {
         const auto& skin=data->skins[0];Need(skin.joints_count && skin.joints_count<=256,"Invalid skin joint count");
         if(skin.inverse_bind_matrices)Need(skin.inverse_bind_matrices->type==cgltf_type_mat4 && skin.inverse_bind_matrices->count==skin.joints_count,"Invalid inverse bind accessor");
         const auto reflect=XMMatrixScaling(1,1,-1);
@@ -187,6 +189,7 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
             SkinBinding b;b.joint=remap[skin.joints[k]-data->nodes];XMStoreFloat4x4(&b.inverseBind,XMMatrixIdentity());
             if(skin.inverse_bind_matrices)Need(cgltf_accessor_read_float(skin.inverse_bind_matrices,k,&b.inverseBind._11,16),"Cannot decode inverse bind");
             XMStoreFloat4x4(&b.inverseBind,reflect*XMLoadFloat4x4(&b.inverseBind)*reflect);skeletal->bindings.push_back(b);
+        }
         }
         for(size_t i=0;i<data->animations_count;++i) {
             const auto& input=data->animations[i];AnimationClip clip;clip.name=input.name?input.name:std::format("clip-{}",i);
@@ -211,6 +214,29 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
             }
             skeletal->clips.push_back(std::move(clip));
         }
+    }
+    if (animationOnly) {
+        // モデル付きの出力ではSkin Jointと祖先を共通骨格とし、モデル固有のMeshノードを除く。
+        if (!skeletal->bindings.empty()) {
+            std::vector<bool> used(skeletal->joints.size());
+            for (const auto& binding : skeletal->bindings)
+                for (int32_t joint = static_cast<int32_t>(binding.joint); joint >= 0; joint = skeletal->joints[joint].parent) used[joint] = true;
+            std::vector<uint32_t> remap(used.size(), UINT32_MAX);
+            std::vector<SkeletonJoint> joints;
+            for (size_t i = 0; i < used.size(); ++i) if (used[i]) {
+                auto joint = skeletal->joints[i];
+                if (joint.parent >= 0) joint.parent = static_cast<int32_t>(remap[joint.parent]);
+                remap[i] = static_cast<uint32_t>(joints.size()); joints.push_back(std::move(joint));
+            }
+            for (auto& clip : skeletal->clips) for (auto& channel : clip.channels) {
+                Need(used[channel.joint], "Shared clip animates a model-specific node outside the skin hierarchy");
+                channel.joint = remap[channel.joint];
+            }
+            skeletal->joints = std::move(joints);
+        }
+        // 未使用の画像も原本の依存として記録し、report/outputによる破壊を防ぐ。
+        for (size_t i = 0; i < data->images_count; ++i) if (data->images[i].uri) (void)imp.External(data->images[i].uri);
+        return std::move(imp.asset);
     }
     const auto init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     Hr(init, "Initialize WIC COM");
@@ -343,5 +369,11 @@ static StaticAsset CookModel(const std::filesystem::path& source, const std::str
 StaticAsset CookStatic(const std::filesystem::path& source,const std::string& id) {return CookModel(source,id,nullptr);}
 SkeletalAsset CookSkeletal(const std::filesystem::path& source,const std::string& id) {
     SkeletalAsset a;a.mesh=CookModel(source,id,&a);ValidateSkeletalAsset(a);return a;
+}
+AnimationLibrary CookAnimation(const std::filesystem::path& source, const std::string& id) {
+    SkeletalAsset temporary;
+    auto metadata = CookModel(source, id, &temporary, true);
+    AnimationLibrary library{id, std::move(temporary.joints), std::move(temporary.clips), std::move(metadata.dependencies)};
+    ValidateAnimationLibrary(library); return library;
 }
 }

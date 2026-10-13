@@ -27,6 +27,7 @@ const char* KindName(SceneAssetKind kind) {
     case SceneAssetKind::Static: return "static";
     case SceneAssetKind::Skeletal: return "skeletal";
     case SceneAssetKind::Effect: return "effect";
+    case SceneAssetKind::Animation: return "animation";
     }
     throw std::runtime_error("Invalid scene asset kind");
 }
@@ -34,6 +35,7 @@ SceneAssetKind ReadKind(const std::string& name) {
     if (name == "static") return SceneAssetKind::Static;
     if (name == "skeletal") return SceneAssetKind::Skeletal;
     if (name == "effect") return SceneAssetKind::Effect;
+    if (name == "animation") return SceneAssetKind::Animation;
     throw std::runtime_error("Unknown scene asset kind: " + name);
 }
 bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
@@ -44,7 +46,7 @@ bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 Json Encode(const SceneDocument& document, const std::filesystem::path& destination) {
-    Json root{{"version", 1}, {"nextId", std::to_string(document.nextId)}};
+    Json root{{"version", 2}, {"nextId", std::to_string(document.nextId)}};
     const auto& view = document.view;
     root["view"] = {{"background", view.background}, {"yaw", view.yaw}, {"pitch", view.pitch}, {"distance", view.distance}, {"unlit", view.unlit}};
     root["assets"] = Json::array();
@@ -62,7 +64,7 @@ Json Encode(const SceneDocument& document, const std::filesystem::path& destinat
         root["entities"].push_back({{"id", std::to_string(entity.id)}, {"parent", std::to_string(entity.parent)},
             {"name", entity.name}, {"asset", entity.asset},
             {"transform", {{"position", entity.local.position}, {"rotation", entity.local.rotation}, {"scale", entity.local.scale}}},
-            {"animation", {{"clip", a.clip}, {"time", a.time}, {"speed", a.speed}, {"loop", a.loop}, {"autoplay", a.autoplay}, {"restPose", a.restPose}, {"bindPose", a.bindPose}}},
+            {"animation", {{"library", a.library}, {"clip", a.clip}, {"time", a.time}, {"speed", a.speed}, {"loop", a.loop}, {"autoplay", a.autoplay}, {"restPose", a.restPose}, {"bindPose", a.bindPose}}},
             {"effect", {{"count", e.count}, {"autoplay", e.autoplay}, {"follow", std::to_string(e.follow)}, {"joint", e.joint}}}});
     }
     return root;
@@ -76,7 +78,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open scene");
         const auto root = Json::parse(stream);
-        if (root.at("version") != 1) throw std::runtime_error("Unsupported scene version");
+        if (root.at("version") != 1 && root.at("version") != 2) throw std::runtime_error("Unsupported scene version");
         SceneDocument document;
         document.nextId = Id(root.at("nextId"));
         const auto& view = root.at("view");
@@ -104,7 +106,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
             entity.local.scale = transform.at("scale").get<std::array<float, 3>>();
             const auto& a = value.at("animation");
             entity.animation = {a.at("clip").get<std::string>(), a.at("time").get<float>(), a.at("speed").get<float>(),
-                a.at("loop").get<bool>(), a.at("autoplay").get<bool>(), a.at("restPose").get<bool>(), a.at("bindPose").get<bool>()};
+                a.at("loop").get<bool>(), a.at("autoplay").get<bool>(), a.at("restPose").get<bool>(), a.at("bindPose").get<bool>(), a.value("library", std::string{})};
             const auto& e = value.at("effect");
             entity.effect = {e.at("count").get<int>(), e.at("autoplay").get<bool>(), Id(e.at("follow")), e.at("joint").get<std::string>()};
             document.entities.push_back(std::move(entity));

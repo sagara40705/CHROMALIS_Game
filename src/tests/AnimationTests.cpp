@@ -10,10 +10,71 @@ using namespace DirectX;
 void Check(bool v,const char* why){if(!v)throw std::runtime_error(why);}
 template<class F> void Reject(F f){bool rejected=false;try{f();}catch(const std::exception&){rejected=true;}Check(rejected,"Invalid animation accepted");}
 bool Near(float a,float b){return std::abs(a-b)<0.005f;}
+void SharedAnimation(const std::filesystem::path& source, const std::filesystem::path& output, const SkeletalAsset& model) {
+    const auto path = output.parent_path() / "common.canim";
+    auto library = CookAnimation(source, "characters/common");
+    SaveAnimationLibrary(library, path);
+    auto rig = std::make_shared<const AnimationRig>(LoadAnimationLibrary(path));
+    auto firstModel = std::make_shared<const SkeletalAsset>(model);
+    auto variant = model;
+    variant.mesh.id = "characters/variant";
+    variant.clips.clear();
+    for (auto& vertex : variant.mesh.vertices) vertex.position[0] *= 1.1f;
+    SaveSkeletalAsset(variant, output.parent_path() / "variant.cskin");
+    auto secondModel = std::make_shared<const SkeletalAsset>(LoadSkeletalAsset(output.parent_path() / "variant.cskin"));
+    AnimationPlayer first(firstModel, rig), second(secondModel, rig);
+    Check(first.Rig() == second.Rig(), "Common rig was duplicated");
+    second.playback.time = library.clips.front().duration * 0.5f;
+    second.Evaluate();
+    Check(first.playback.time == 0, "Playback time leaked between characters");
+    bool differs = false;
+    for (size_t i = 0; i < first.Palette().size(); ++i)
+        for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c)
+            differs |= !Near(first.Palette()[i].m[r][c], second.Palette()[i].m[r][c]);
+    Check(differs, "Shared rig did not produce independent poses");
+    second.playback.playing = false;
+    second.playback.time = second.Clips()[0].duration;
+    second.Update(0);
+    Check(second.playback.time == second.Clips()[0].duration, "Paused endpoint wrapped to start");
+    AnimationPlayer rest(secondModel, {});
+    Check(rest.Clips()[0].name == "Rest", "Model-only rest preview failed");
+
+    // 共通Skeletonの互換性を骨名・親・基準姿勢で確認する。
+    auto incompatible = variant;
+    incompatible.joints[0].name += "-changed";
+    Reject([&] { AnimationPlayer rejected(std::make_shared<const SkeletalAsset>(incompatible), rig); });
+    incompatible = variant;
+    incompatible.joints[0].rest.translation[0] += 1;
+    Reject([&] { AnimationPlayer rejected(std::make_shared<const SkeletalAsset>(incompatible), rig); });
+    auto bad = library;
+    bad.joints.back().name = bad.joints.front().name;
+    Reject([&] { ValidateAnimationLibrary(bad); });
+    bad = library; bad.clips.push_back(bad.clips[0]);
+    Reject([&] { ValidateAnimationLibrary(bad); });
+    const auto good = ReadAssetBytes(path);
+    bad = library; bad.joints[0].parent = 0;
+    Reject([&] { SaveAnimationLibrary(bad, path); });
+    Check(ReadAssetBytes(path) == good, "Invalid library replaced good output");
+    const auto malformed = output.parent_path() / "invalid.canim";
+    auto bytes = good; bytes[4] = 99;
+    { std::ofstream file(malformed, std::ios::binary); file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); }
+    Reject([&] { (void)LoadAnimationLibrary(malformed); });
+    { std::ofstream file(malformed, std::ios::binary); file.write(reinterpret_cast<const char*>(good.data()), static_cast<std::streamsize>(good.size() - 1)); }
+    Reject([&] { (void)LoadAnimationLibrary(malformed); });
+
+    // メッシュを含まないDCC出力も、同じ変換経路で取り込む。
+    const auto animationOnly = output.parent_path() / "animation-only.gltf";
+    const float keys[] = {0, 1, 0, 0, 0, 2, 0, 0};
+    { std::ofstream file(output.parent_path() / "animation-only.bin", std::ios::binary); file.write(reinterpret_cast<const char*>(keys), sizeof(keys)); }
+    { std::ofstream file(animationOnly); file << R"({"asset":{"version":"2.0"},"nodes":[{"name":"root"}],"buffers":[{"uri":"animation-only.bin","byteLength":32}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":8},{"buffer":0,"byteOffset":8,"byteLength":24}],"accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]},{"bufferView":1,"componentType":5126,"count":2,"type":"VEC3"}],"animations":[{"name":"move","samplers":[{"input":0,"output":1,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}]})"; }
+    const auto animation = CookAnimation(animationOnly, "characters/animation-only");
+    Check(animation.joints.size() == 1 && animation.clips.size() == 1 && Near(animation.clips[0].channels[0].keys[1].value[0], 2), "Animation-only glTF failed");
+}
 int wmain(int argc,wchar_t** argv) {
     try {
         Check(argc==3,"Expected source and output");const std::filesystem::path output=argv[2];
         auto asset=CookSkeletal(argv[1],"validation/rigged-figure");SaveSkeletalAsset(asset,output);
+        SharedAnimation(argv[1], output, asset);
         AnimationPlayer external(LoadSkeletalAsset(output));external.playback.bindPose=true;external.Evaluate();
         const auto rest=external.Palette();
         // Rest Poseとは区別し、Inverse Bindから復元した姿勢を検証する。
@@ -50,13 +111,27 @@ int wmain(int argc,wchar_t** argv) {
         gpu.mesh.textures={{2,2,{255,0,0,255,0,255,0,255,0,0,255,255,255,255,0,255}}};gpu.skin.resize(4);
         gpu.clips={{"translate",1,{{0,0,{{0,{0,0,0,0}},{1,{1,0,0,0}}}}}}};
         SaveSkeletalAsset(gpu,output.parent_path()/"skinning.cskin");
+        // 骨番号が異なっても、同じ名前と親子関係なら共通Clipを再利用する。
+        auto ordered = gpu;
+        ordered.joints = {{"root", -1, {}}, {"left", 0, {}}, {"right", 0, {}}};
+        ordered.bindings[0].joint = 1;
+        ordered.clips[0].channels[0].joint = 1;
+        auto sharedRig = std::make_shared<const AnimationRig>(ordered);
+        auto reordered = ordered;
+        std::swap(reordered.joints[1], reordered.joints[2]);
+        reordered.bindings[0].joint = 2; reordered.clips.clear();
+        AnimationPlayer mapped(std::make_shared<const SkeletalAsset>(reordered), sharedRig);
+        mapped.playback.time = 0.5f; mapped.Evaluate();
+        Check(Near(mapped.Palette()[0]._41, 0.5f), "Joint name remapping failed");
+        reordered.joints[2].parent = 1;
+        Reject([&] { AnimationPlayer invalid(std::make_shared<const SkeletalAsset>(reordered), sharedRig); });
         auto bad=test;bad.joints[0].parent=1;Reject([&]{SaveSkeletalAsset(bad,output);});Check(good==ReadAssetBytes(output),"Failed save changed good package");
         bad=test;bad.skin[0].joints[0]=99;Reject([&]{ValidateSkeletalAsset(bad);});
         bad=test;bad.skin[0].weights[0]=0;Reject([&]{ValidateSkeletalAsset(bad);});
         bad=test;bad.clips[0].channels[0].keys[1].time=0;Reject([&]{ValidateSkeletalAsset(bad);});
         bad=test;bad.joints[1].rest.scale[0]=0;Reject([&]{ValidateSkeletalAsset(bad);});
         const auto malformed=output.parent_path()/"invalid.cskin";
-        auto unknownVersion=good;unknownVersion[4]=2;
+        auto unknownVersion=good;unknownVersion[4]=99;
         {std::ofstream f(malformed,std::ios::binary);f.write(reinterpret_cast<const char*>(unknownVersion.data()),static_cast<std::streamsize>(unknownVersion.size()));}
         Reject([&]{(void)LoadSkeletalAsset(malformed);});
         for(size_t n:{size_t(4),good.size()-1}){{std::ofstream f(malformed,std::ios::binary);f.write(reinterpret_cast<const char*>(good.data()),static_cast<std::streamsize>(n));}Reject([&]{(void)LoadSkeletalAsset(malformed);});}

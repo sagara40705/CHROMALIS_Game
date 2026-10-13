@@ -39,16 +39,21 @@ void IndependentPalettes(Renderer& renderer, SceneRuntime& scene, const std::fil
     document.view.yaw = 0; document.view.pitch = 0; document.view.distance = 6; document.view.unlit = true;
     const auto asset = LoadSkeletalAsset(skin);
     document.assets.push_back({asset.mesh.id, SceneAssetKind::Skeletal, skin});
+    const auto libraryPath = root / "palettes.canim";
+    SaveAnimationLibrary({"scene/shared", asset.joints, asset.clips, {}}, libraryPath);
+    document.assets.push_back({"scene/shared", SceneAssetKind::Animation, libraryPath});
     for (int i = 0; i < 3; ++i) {
         const auto id = document.Add("Independent pose");
         auto& entity = document.Entity(id);
         entity.asset = asset.mesh.id; entity.local.scale = {0.5f, 0.5f, 0.5f};
         entity.local.position = {-1.5f + i * 1.5f, 0, 0};
         entity.animation.time = i * 0.4f; entity.animation.autoplay = false;
+        entity.animation.library = "scene/shared";
     }
     Require(scene.Apply(document), "Palette scene failed");
     Require(scene.DrawItems()[0].mesh == scene.DrawItems()[1].mesh, "Shared mesh was duplicated");
     Require(scene.Animation(1) != scene.Animation(2), "Playback must belong to each entity");
+    Require(scene.Animation(1)->Rig() == scene.Animation(2)->Rig(), "Shared animation rig was duplicated");
     for (int i = 0; i < 5; ++i) Frame(renderer, scene, i == 4);
     const auto path = root / "palettes.bmp";
     renderer.SaveCapture(path, false);
@@ -65,6 +70,32 @@ void IndependentPalettes(Renderer& renderer, SceneRuntime& scene, const std::fil
         unsigned char bgr[3]{}; file.read(reinterpret_cast<char*>(bgr), 3);
         Require(file.good() && bgr[0] < 3 && bgr[1] < 3 && bgr[2] > 252, "Independent skin palette pixel mismatch");
     }
+    Require(scene.Save(root / "shared.cscene") && scene.Open(root / "shared.cscene"), "Shared scene roundtrip failed");
+    Require(scene.Document().Entity(2).animation.library == "scene/shared", "Library reference lost during save");
+    const auto player = scene.Animation(2);
+    const auto rig = player->Rig();
+    const auto time = player->playback.time;
+    const auto bytes = ReadAssetBytes(libraryPath);
+    { std::ofstream libraryFile(libraryPath, std::ios::binary); libraryFile << "invalid"; }
+    Require(!scene.ReloadAsset("scene/shared"), "Invalid animation reload accepted");
+    Require(scene.Animation(2) == player && player->Rig() == rig && player->playback.time == time, "Failed reload lost live pose");
+    { std::ofstream libraryFile(libraryPath, std::ios::binary); libraryFile.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); }
+    Require(scene.ReloadAsset("scene/shared"), "Common animation reload failed");
+    Require(scene.Animation(1)->Rig() == scene.Animation(2)->Rig() && scene.Animation(2)->Rig() != rig, "Reload did not replace all shared users");
+    // 正常な別モデルへの差し替えでも共通アニメーションの参照を維持する。
+    auto variant = asset; variant.mesh.id = "scene/variant"; variant.clips.clear();
+    const auto variantPath = root / "variant.cskin";
+    SaveSkeletalAsset(variant, variantPath);
+    Require(scene.AssignAsset(2, variantPath, SceneAssetKind::Skeletal), "Compatible model replacement failed");
+    Require(scene.Document().Entity(2).animation.library == "scene/shared", "Model replacement lost animation library");
+    const auto oldModel = scene.Animation(2);
+    variant.joints[0].rest.translation[0] += 1;
+    SaveSkeletalAsset(variant, variantPath);
+    Require(!scene.ReloadAsset(variant.mesh.id) && scene.Animation(2) == oldModel, "Incompatible model reload lost live state");
+    Frame(renderer, scene);
+    Require(scene.Delete(1) && scene.Delete(2), "Shared user deletion failed");
+    Require(scene.Document().Asset("scene/shared").kind == SceneAssetKind::Animation, "Deleting one user removed shared library");
+    Require(scene.Delete(3) && scene.Document().assets.empty(), "Unused shared library was retained");
 }
 void NormalTransform(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& skin, const std::filesystem::path& root) {
     auto mesh = LoadSkeletalAsset(skin).mesh;

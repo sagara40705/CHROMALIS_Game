@@ -15,6 +15,16 @@ struct AnimationKey { float time = 0; std::array<float,4> value{}; };
 // property: 0=位置、1=回転、2=スケール。初期経路はLINEARのみを受理する。
 struct AnimationChannel { uint32_t joint = 0, property = 0; std::vector<AnimationKey> keys; };
 struct AnimationClip { std::string name; float duration = 0; std::vector<AnimationChannel> channels; };
+// 共通SkeletonとClip群をモデルから分離する。描画用メッシュやInverse Bindは含めない。
+struct AnimationLibrary {
+    std::string id;
+    std::vector<SkeletonJoint> joints;
+    std::vector<AnimationClip> clips;
+    std::vector<AssetDependency> dependencies;
+};
+void ValidateAnimationLibrary(const AnimationLibrary& library);
+AnimationLibrary LoadAnimationLibrary(const std::filesystem::path& path);
+void SaveAnimationLibrary(const AnimationLibrary& library, const std::filesystem::path& path);
 struct SkeletalAsset {
     StaticAsset mesh;
     std::vector<SkeletonJoint> joints;

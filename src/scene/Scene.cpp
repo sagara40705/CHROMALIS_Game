@@ -130,7 +130,7 @@ void ValidateScene(const SceneDocument& document) {
     for (const auto& asset : document.assets) {
         Require(!asset.id.empty() && asset.id.size() <= 256 && assets.insert(asset.id).second, "Invalid/duplicate scene asset ID");
         Require(!asset.path.empty(), "Empty scene asset path");
-        Require(asset.kind == SceneAssetKind::Static || asset.kind == SceneAssetKind::Skeletal || asset.kind == SceneAssetKind::Effect, "Invalid asset kind");
+        Require(asset.kind == SceneAssetKind::Static || asset.kind == SceneAssetKind::Skeletal || asset.kind == SceneAssetKind::Effect || asset.kind == SceneAssetKind::Animation, "Invalid asset kind");
     }
     const auto order = SceneOrder(document);
     for (const auto& entity : document.entities) {
@@ -142,11 +142,15 @@ void ValidateScene(const SceneDocument& document) {
         Require(std::abs(norm - 1) < 0.001f, "Scene rotation must be a unit quaternion");
         for (float value : entity.local.scale) Require(value > 0, "Scene scale must be positive");
         if (entity.asset.empty()) {
+            Require(entity.animation.library.empty(), "Empty object cannot reference animations");
             Require(!entity.effect.follow, "Empty object cannot follow a socket");
             continue;
         }
         const auto kind = document.Asset(entity.asset).kind;
         const auto& animation = entity.animation;
+        Require(kind != SceneAssetKind::Animation, "Animation library cannot be used as a model");
+        if (!animation.library.empty()) Require(kind == SceneAssetKind::Skeletal && document.Asset(animation.library).kind == SceneAssetKind::Animation,
+            "Shared animations require a skeletal model and animation library");
         Require(std::isfinite(animation.time) && animation.time >= 0 && std::isfinite(animation.speed), "Invalid animation initial state");
         Require(!(animation.restPose && animation.bindPose), "Select either Rest or Bind pose");
         Require(entity.effect.count >= 1 && entity.effect.count <= 64, "Effect count must be 1..64");

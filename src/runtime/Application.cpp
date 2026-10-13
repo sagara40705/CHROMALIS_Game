@@ -365,7 +365,7 @@ private:
         document.Entity(3).local = pose(legacy_.animated);
         if (auto* animation = scene_.Animation(3)) {
             const auto& playback = animation->playback;
-            document.Entity(3).animation = {animation->Asset().clips[playback.clip].name, playback.time, playback.speed,
+            document.Entity(3).animation = {animation->Clips()[playback.clip].name, playback.time, playback.speed,
                 playback.loop, playback.playing, playback.restPose, playback.bindPose};
         }
         auto& effect = document.Entity(4);

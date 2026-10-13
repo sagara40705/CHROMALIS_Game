@@ -28,9 +28,9 @@ ReparentはLocal維持で、Worldは変化する。Deleteは子孫も削除す�
 
 ## 保存・読み込み・更新
 
-`.cscene`はUTF-8 JSON、version=1。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
+`.cscene`はUTF-8 JSON。共通Animation参照を含むversion=2で保存し、旧version=1も読み込む。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
 
-Entity IDは64bitの十進文字列。Asset表はID・static/skeletal/effect・Sceneファイルからの相対パスを持つ。cmesh/cskin内のIDとの一致も読み込み時に検査する。絶対パスは保存せず、Save Asで相対パスを再計算する。同一ボリューム上の配置を要求する。Sceneは信頼するローカル制作物であり、相対パスの`..`は許可する。
+Entity IDは64bitの十進文字列。Asset表はID・static/skeletal/effect/animation・Sceneファイルからの相対パスを持つ。cmesh/cskin/canim内のIDとの一致も読み込み時に検査する。共通Skeleton・Clipの所有と互換性は[shared-animation.md](shared-animation.md)を参照。絶対パスは保存せず、Save Asで相対パスを再計算する。同一ボリューム上の配置を要求する。Sceneは信頼するローカル制作物であり、相対パスの`..`は許可する。
 
 保存対象は配置・初期再生設定・カメラ。再生中の時刻、選択、GPU handleは保存しない。入力境界で重複ID、参照切れ、親/追従の循環、階層深度、有限値、Quaternion、可逆性、版、件数/ファイルサイズを検査する。現在は最大10,000オブジェクト/アセット、親階層128、JSON 16 MiBの入力保護。性能保証ではない。
 

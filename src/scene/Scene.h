@@ -8,7 +8,7 @@
 
 namespace chromalis {
 using EntityId = uint64_t;
-enum class SceneAssetKind { Static, Skeletal, Effect };
+enum class SceneAssetKind { Static, Skeletal, Effect, Animation };
 
 struct Transform {
     std::array<float, 3> position{0, 0, 0};
@@ -24,6 +24,7 @@ struct AnimationInitialState {
     std::string clip;
     float time = 0, speed = 1;
     bool loop = true, autoplay = true, restPose = false, bindPose = false;
+    std::string library;
     bool operator==(const AnimationInitialState&) const = default;
 };
 struct EffectInitialState {

@@ -8,4 +8,7 @@ $output = Join-Path $gameRoot 'out/cooked/scene-samples'
 if ($LASTEXITCODE -ne 0) { throw 'Cube cook failed' }
 & $cookerPath (Join-Path $gameRoot 'assets/RiggedFigure/RiggedFigure.glb') (Join-Path $output 'Figure.cskin') --id samples/scene-character
 if ($LASTEXITCODE -ne 0) { throw 'Character cook failed' }
+& $cookerPath (Join-Path $gameRoot 'assets/RiggedFigure/RiggedFigure.glb') (Join-Path $output 'Common.canim') --id samples/common-animation
+if ($LASTEXITCODE -ne 0) { throw 'Common animation cook failed' }
 Write-Output (Join-Path $PSScriptRoot 'Example.cscene')
+Write-Output (Join-Path $PSScriptRoot 'SharedAnimation.cscene')

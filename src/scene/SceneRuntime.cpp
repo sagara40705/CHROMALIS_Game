@@ -12,7 +12,8 @@ struct LoadedAsset {
     Log* log = nullptr;
     SceneAsset source;
     MeshHandle mesh;
-    std::unique_ptr<SkeletalAsset> skeleton;
+    std::shared_ptr<const SkeletalAsset> skeleton;
+    std::shared_ptr<const AnimationRig> rig;
     std::vector<DirectX::XMFLOAT3> pickVertices;
     std::vector<uint32_t> pickIndices;
     uint64_t generation = 0;
@@ -24,6 +25,7 @@ struct LoadedAsset {
 };
 struct Instance {
     std::shared_ptr<LoadedAsset> asset;
+    std::shared_ptr<LoadedAsset> animationAsset;
     AnimationInitialState animationInitial;
     EffectInitialState effectInitial;
     std::unique_ptr<AnimationPlayer> animation;
@@ -36,7 +38,7 @@ size_t FindJoint(const AnimationPlayer& player, const std::string& name) {
     return static_cast<size_t>(found - joints.begin());
 }
 void SetInitialState(AnimationPlayer& player, const AnimationInitialState& initial) {
-    const auto& clips = player.Asset().clips;
+    const auto& clips = player.Clips();
     size_t clip = 0;
     if (!initial.clip.empty()) {
         const auto found = std::find_if(clips.begin(), clips.end(), [&](const auto& value) { return value.name == initial.clip; });
@@ -92,9 +94,13 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
                 for (const auto& vertex : cpu.vertices) asset->pickVertices.emplace_back(vertex.position[0], vertex.position[1], vertex.position[2]);
                 asset->pickIndices = cpu.indices;
             } else if (source.kind == SceneAssetKind::Skeletal) {
-                asset->skeleton = std::make_unique<SkeletalAsset>(LoadSkeletalAsset(source.path));
+                asset->skeleton = std::make_shared<const SkeletalAsset>(LoadSkeletalAsset(source.path));
                 if (asset->skeleton->mesh.id != source.id) throw std::runtime_error("Skeletal asset ID mismatch: " + source.id);
                 asset->mesh = renderer_.CreateMesh(asset->skeleton->mesh, &asset->skeleton->skin);
+            } else if (source.kind == SceneAssetKind::Animation) {
+                auto library = LoadAnimationLibrary(source.path);
+                if (library.id != source.id) throw std::runtime_error("Animation library ID mismatch: " + source.id);
+                asset->rig = std::make_shared<const AnimationRig>(std::move(library));
             } else {
                 // 未配置アセットも制作物として読めることを確認する。
                 VfxPlayer validation(renderer_.Device(), renderer_.Queue(), Renderer::SceneFormat);
@@ -106,10 +112,11 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
             auto instance = std::make_shared<Instance>();
             if (!entity.asset.empty()) {
                 instance->asset = candidate->assets.at(entity.asset);
+                if (!entity.animation.library.empty()) instance->animationAsset = candidate->assets.at(entity.animation.library);
                 const auto old = state_->indices.find(entity.id);
                 if (reload != "*" && old != state_->indices.end()) {
                     const auto& previous = state_->instances[old->second];
-                    if (previous->asset == instance->asset && previous->animationInitial == entity.animation && previous->effectInitial == entity.effect) {
+                    if (previous->asset == instance->asset && previous->animationAsset == instance->animationAsset && previous->animationInitial == entity.animation && previous->effectInitial == entity.effect) {
                         // 再生状態は共有し、参照先Indexだけは候補Scene専用に保持する。
                         candidate->instances.push_back(previous);
                         continue;
@@ -118,7 +125,10 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
                 instance->animationInitial = entity.animation;
                 instance->effectInitial = entity.effect;
                 if (instance->asset->skeleton) {
-                    instance->animation = std::make_unique<AnimationPlayer>(*instance->asset->skeleton);
+                    if (!instance->animationAsset && !instance->asset->rig)
+                        instance->asset->rig = std::make_shared<const AnimationRig>(*instance->asset->skeleton);
+                    instance->animation = std::make_unique<AnimationPlayer>(instance->asset->skeleton,
+                        instance->animationAsset ? instance->animationAsset->rig : instance->asset->rig);
                     SetInitialState(*instance->animation, entity.animation);
                 } else if (instance->asset->source.kind == SceneAssetKind::Effect) {
                     instance->effect = std::make_unique<VfxPlayer>(renderer_.Device(), renderer_.Queue(), Renderer::SceneFormat);
@@ -200,6 +210,7 @@ bool SceneRuntime::AssignAsset(EntityId entity, const std::filesystem::path& pat
         auto id = std::string("effect/") + std::to_string(entity);
         if (kind == SceneAssetKind::Static) id = LoadStaticAsset(path).id;
         if (kind == SceneAssetKind::Skeletal) id = LoadSkeletalAsset(path).mesh.id;
+        if (kind == SceneAssetKind::Animation) id = LoadAnimationLibrary(path).id;
         return AssignAsset(entity, {id, kind, std::filesystem::absolute(path).lexically_normal()});
     } catch (const GpuFailure&) {
         throw;
@@ -224,8 +235,16 @@ bool SceneRuntime::ReloadAsset(const std::string& id, const std::filesystem::pat
 bool SceneRuntime::AssignAsset(EntityId entity, const SceneAsset& asset) {
     auto document = Document();
     auto& target = document.Entity(entity);
-    if (target.asset != asset.id) { target.animation = {}; target.effect = {}; }
-    target.asset = asset.id;
+    if (asset.kind == SceneAssetKind::Animation) {
+        if (target.asset.empty() || document.Asset(target.asset).kind != SceneAssetKind::Skeletal) { status_ = "Select a skeletal model before assigning shared animations"; return false; }
+        target.animation = {}; target.animation.library = asset.id;
+    } else {
+        if (target.asset != asset.id) {
+            if (asset.kind != SceneAssetKind::Skeletal || target.animation.library.empty()) target.animation = {};
+            target.effect = {};
+        }
+        target.asset = asset.id;
+    }
     auto found = std::find_if(document.assets.begin(), document.assets.end(), [&](const auto& value) { return value.id == asset.id; });
     if (found == document.assets.end()) document.assets.push_back(asset);
     else {
@@ -233,7 +252,7 @@ bool SceneRuntime::AssignAsset(EntityId entity, const SceneAsset& asset) {
         *found = asset;
     }
     std::erase_if(document.assets, [&](const auto& value) {
-        return std::none_of(document.entities.begin(), document.entities.end(), [&](const auto& object) { return object.asset == value.id; });
+        return std::none_of(document.entities.begin(), document.entities.end(), [&](const auto& object) { return object.asset == value.id || object.animation.library == value.id; });
     });
     if (!Replace(std::move(document), asset.id)) return false;
     dirty_ = true;
@@ -250,7 +269,7 @@ bool SceneRuntime::Delete(EntityId entity) {
     }
     // 最後の参照を削除したアセットは、このSceneからも解放する。
     std::erase_if(document.assets, [&](const auto& asset) {
-        return std::none_of(document.entities.begin(), document.entities.end(), [&](const auto& value) { return value.asset == asset.id; });
+        return std::none_of(document.entities.begin(), document.entities.end(), [&](const auto& value) { return value.asset == asset.id || value.animation.library == asset.id; });
     });
     return Apply(std::move(document));
 }
