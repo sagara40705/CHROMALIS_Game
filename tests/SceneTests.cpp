@@ -93,7 +93,7 @@ void Persistence(const std::filesystem::path& root) {
     Require(loaded.Entity(effect).effect.follow == model && loaded.Entity(model).animation.time == 0.25f, "Roundtrip state");
     Require(loaded.Entity(effect).effect.followTransform, "Socket transform mode was not saved");
     auto legacy = bytes;
-    legacy.replace(legacy.find("\"version\": 8"), 12, "\"version\": 7");
+    legacy.replace(legacy.find("\"version\": 9"), 12, "\"version\": 7");
     { std::ofstream file(root / "legacy.cscene"); file << legacy; }
     Require(!LoadScene(root / "legacy.cscene").Entity(effect).effect.followTransform, "Legacy socket mode changed");
     SaveScene(loaded, root / "nested/copy.cscene");
@@ -132,9 +132,9 @@ void Persistence(const std::filesystem::path& root) {
     std::filesystem::remove(alias);
     Reject([&] { SaveScene(scene, root / "texture.png"); });
     auto malformed = bytes;
-    const auto version = malformed.find("\"version\": 8");
+    const auto version = malformed.find("\"version\": 9");
     Require(version != std::string::npos, "Missing schema version");
-    malformed.replace(version, 12, "\"version\": 9");
+    malformed.replace(version, 12, "\"version\": 10");
     { std::ofstream file(root / "bad.cscene"); file << malformed; }
     Reject([&] { (void)LoadScene(root / "bad.cscene"); });
     scene.DeleteSubtree(model);

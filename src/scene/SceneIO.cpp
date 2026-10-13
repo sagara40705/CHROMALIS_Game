@@ -46,7 +46,7 @@ bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 Json Encode(const SceneDocument& document, const std::filesystem::path& destination) {
-    Json root{{"version", 8}, {"nextId", std::to_string(document.nextId)}};
+    Json root{{"version", 9}, {"nextId", std::to_string(document.nextId)}};
     const auto& view = document.view;
     const auto& p = document.play;
     root["play"] = {{"player", std::to_string(p.player)}, {"cameraTarget", std::to_string(p.cameraTarget)},
@@ -86,10 +86,17 @@ Json Encode(const SceneDocument& document, const std::filesystem::path& destinat
             {"animation", {{"library", a.library}, {"clip", a.clip}, {"time", a.time}, {"speed", a.speed}, {"loop", a.loop}, {"autoplay", a.autoplay}, {"restPose", a.restPose}, {"bindPose", a.bindPose}}},
             {"effect", {{"count", e.count}, {"autoplay", e.autoplay}, {"follow", std::to_string(e.follow)}, {"joint", e.joint}, {"followTransform", e.followTransform}}}});
         auto& behaviours = root["entities"].back()["behaviours"] = Json::array();
-        for (const auto& b : entity.behaviours) {
-            const auto settings = Json::parse(b.settings);
+        const auto& c = entity.collider; const auto& b = entity.rigidBody;
+        root["entities"].back()["collider"] = {{"enabled", c.enabled}, {"shape", static_cast<int>(c.shape)},
+            {"center", c.center}, {"size", c.size}, {"radius", c.radius}, {"height", c.height}};
+        root["entities"].back()["rigidBody"] = {{"enabled", b.enabled}, {"motion", static_cast<int>(b.motion)},
+            {"mass", b.mass}, {"friction", b.friction}, {"restitution", b.restitution}, {"gravityFactor", b.gravityFactor},
+            {"linearDamping", b.linearDamping}, {"angularDamping", b.angularDamping}, {"lockRotation", b.lockRotation},
+            {"continuous", b.continuous}, {"velocity", b.velocity}};
+        for (const auto& behaviour : entity.behaviours) {
+            const auto settings = Json::parse(behaviour.settings);
             if (!settings.is_object()) throw std::runtime_error("Behaviour settings must be an object");
-            behaviours.push_back({{"id", std::to_string(b.id)}, {"type", b.type}, {"version", b.version}, {"enabled", b.enabled}, {"settings", settings}});
+            behaviours.push_back({{"id", std::to_string(behaviour.id)}, {"type", behaviour.type}, {"version", behaviour.version}, {"enabled", behaviour.enabled}, {"settings", settings}});
         }
         auto& bindings = root["entities"].back()["materials"] = Json::array();
         for (const auto& binding : entity.materials) bindings.push_back({{"slot", binding.slot}, {"material", binding.material}});
@@ -105,7 +112,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open scene");
         const auto root = Json::parse(stream);
-        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4 && root.at("version") != 5 && root.at("version") != 6 && root.at("version") != 7 && root.at("version") != 8) throw std::runtime_error("Unsupported scene version");
+        if (!root.at("version").is_number_integer() || root.at("version") < 1 || root.at("version") > 9) throw std::runtime_error("Unsupported scene version");
         SceneDocument document;
         document.legacyBehaviours = root.at("version") < 7;
         document.nextId = Id(root.at("nextId"));
@@ -183,6 +190,18 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
             const auto& e = value.at("effect");
             entity.effect = {e.at("count").get<int>(), e.at("autoplay").get<bool>(), Id(e.at("follow")), e.at("joint").get<std::string>()};
             if (root.at("version") >= 8) entity.effect.followTransform = e.at("followTransform").get<bool>();
+            if (root.at("version") >= 9) {
+                const auto& c = value.at("collider"); const auto& b = value.at("rigidBody");
+                if (!c.at("shape").is_number_integer() || c.at("shape") < 0 || c.at("shape") > 2 ||
+                    !b.at("motion").is_number_integer() || b.at("motion") < 0 || b.at("motion") > 2)
+                    throw std::runtime_error("Invalid physics shape/motion");
+                entity.collider = {c.at("enabled").get<bool>(), static_cast<ColliderShape>(c.at("shape").get<int>()),
+                    c.at("center").get<std::array<float, 3>>(), c.at("size").get<std::array<float, 3>>(), c.at("radius").get<float>(), c.at("height").get<float>()};
+                entity.rigidBody = {b.at("enabled").get<bool>(), static_cast<BodyMotion>(b.at("motion").get<int>()),
+                    b.at("mass").get<float>(), b.at("friction").get<float>(), b.at("restitution").get<float>(), b.at("gravityFactor").get<float>(),
+                    b.at("linearDamping").get<float>(), b.at("angularDamping").get<float>(), b.at("lockRotation").get<bool>(),
+                    b.at("continuous").get<bool>(), b.at("velocity").get<std::array<float, 3>>()};
+            }
             if (root.at("version") >= 3) {
                 const auto& bindings = value.at("materials");
                 if (!bindings.is_array() || bindings.size() > 4096) throw std::runtime_error("Invalid material bindings");

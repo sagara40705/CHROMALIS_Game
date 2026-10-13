@@ -72,6 +72,7 @@ SceneRuntime::~SceneRuntime() {
 }
 const SceneDocument& SceneRuntime::Document() const { return state_->document; }
 bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
+    if (physics_) { status_ = "Stop Play before changing physics Scene structure or assets"; return false; }
     try {
         MigrateSceneBehaviours(document);
         ValidateScene(document);
@@ -322,6 +323,7 @@ bool SceneRuntime::Delete(EntityId entity) {
     return Apply(std::move(document));
 }
 void SceneRuntime::Clear() {
+    StopPhysics();
     renderer_.WaitIdle();
     state_ = std::make_unique<State>();
     renderer_.DrainDiagnostics();
@@ -331,7 +333,24 @@ void SceneRuntime::Update(float seconds) {
 }
 void SceneRuntime::SetRuntimeTransform(EntityId entity, const Transform& transform) {
     ValidateTransform(transform);
+    if (physics_ && Document().Entity(entity).collider.enabled) physics_->SetKinematicTarget(entity, transform);
     state_->locals.at(state_->indices.at(entity)) = transform;
+}
+void SceneRuntime::StartPhysics() {
+    if (physics_) throw std::runtime_error("Physics is already running");
+    if (std::any_of(Document().entities.begin(), Document().entities.end(), [](const auto& entity) { return entity.collider.enabled; })) {
+        // 既に実行用Transformが変更されている場合も、現在の位置から物理を開始する。
+        auto initial = Document();
+        for (size_t i = 0; i < initial.entities.size(); ++i) initial.entities[i].local = state_->locals[i];
+        physics_ = std::make_unique<PhysicsWorld>(initial);
+    }
+}
+void SceneRuntime::StopPhysics() { physics_.reset(); }
+void SceneRuntime::StepPhysics(float seconds) {
+    if (!physics_) return;
+    physics_->Step(seconds);
+    // 物理が確定した姿勢だけを実行用Transformへ戻し、制作データは変更しない。
+    for (const auto& pose : physics_->Poses()) state_->locals[state_->indices.at(pose.entity)] = pose.transform;
 }
 const Transform& SceneRuntime::RuntimeTransform(EntityId entity) const {
     return state_->locals.at(state_->indices.at(entity));

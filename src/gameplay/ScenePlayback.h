@@ -26,5 +26,6 @@ private:
     };
     std::vector<Instance> instances_;
     SceneRuntime* scene_ = nullptr;
+    bool ownsPhysics_ = false;
 };
 }

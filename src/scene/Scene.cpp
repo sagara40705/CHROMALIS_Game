@@ -168,6 +168,36 @@ void ValidateScene(const SceneDocument& document) {
     const auto order = SceneOrder(document);
     for (const auto& entity : document.entities) {
         Require(entity.behaviours.size() <= 128, "Too many Behaviours on an entity");
+        const auto& collider = entity.collider;
+        const auto& body = entity.rigidBody;
+        Require(collider.shape >= ColliderShape::Box && collider.shape <= ColliderShape::Capsule, "Invalid Collider shape");
+        Require(body.motion >= BodyMotion::Static && body.motion <= BodyMotion::Kinematic, "Invalid RigidBody motion");
+        for (float value : collider.center) Require(std::isfinite(value), "Invalid Collider center");
+        for (float value : collider.size) Require(std::isfinite(value) && value > 0, "Collider size must be positive");
+        Require(std::isfinite(collider.radius) && collider.radius > 0 && std::isfinite(collider.height) && collider.height > 0, "Invalid Collider radius/height");
+        for (float value : body.velocity) Require(std::isfinite(value), "Invalid RigidBody velocity");
+        Require(std::isfinite(body.mass) && body.mass > 0 && std::isfinite(body.friction) && body.friction >= 0 &&
+            std::isfinite(body.restitution) && body.restitution >= 0 && body.restitution <= 1 &&
+            std::isfinite(body.gravityFactor) && body.gravityFactor >= 0 &&
+            std::isfinite(body.linearDamping) && body.linearDamping >= 0 && body.linearDamping <= 1 &&
+            std::isfinite(body.angularDamping) && body.angularDamping >= 0 && body.angularDamping <= 1, "Invalid RigidBody parameters");
+        Require(!body.enabled || collider.enabled, "RigidBody requires an enabled Collider");
+        if (collider.enabled) {
+            Require(entity.parent == 0 && !entity.effect.follow, "Physics currently requires a root object without socket following");
+            for (float value : entity.local.scale) Require(value > 0, "Collider requires positive Scale");
+            // Joltへ渡す前に、乗算のオーバーフローと極小形状による無効な慣性を除外する。
+            const auto dimension = [](double value) { Require(std::isfinite(value) && value >= 0.0001 && value <= 10000, "Effective Collider dimension must be 0.0001..10000 meters"); };
+            for (size_t axis = 0; axis < 3; ++axis) {
+                Require(std::abs(double(collider.center[axis]) * entity.local.scale[axis]) <= 10000, "Collider center is too large");
+                if (collider.shape == ColliderShape::Box) dimension(double(collider.size[axis]) * entity.local.scale[axis]);
+            }
+            if (collider.shape != ColliderShape::Box) dimension(double(collider.radius) * entity.local.scale[0]);
+            if (collider.shape != ColliderShape::Box)
+                Require(std::abs(entity.local.scale[0] - entity.local.scale[1]) <= 0.00001f * entity.local.scale[0] && std::abs(entity.local.scale[0] - entity.local.scale[2]) <= 0.00001f * entity.local.scale[0],
+                    "Sphere/Capsule require uniform Scale");
+            if (collider.shape == ColliderShape::Capsule) Require(collider.height > 2 * collider.radius, "Capsule height must exceed its diameter");
+            if (collider.shape == ColliderShape::Capsule) dimension(double(collider.height) * entity.local.scale[0]);
+        }
         std::unordered_set<uint64_t> behaviourIds;
         for (const auto& behaviour : entity.behaviours) {
             Require(behaviour.id && behaviour.id < UINT64_MAX && behaviourIds.insert(behaviour.id).second, "Invalid/duplicate Behaviour ID");

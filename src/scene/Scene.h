@@ -46,6 +46,22 @@ struct BehaviourDefinition {
     // 未登録の型の設定も失わない。解釈と型検証はPlay開始時に行う。
     std::string settings = "{}";
 };
+enum class ColliderShape { Box, Sphere, Capsule };
+enum class BodyMotion { Static, Dynamic, Kinematic };
+struct ColliderDefinition {
+    bool enabled = false;
+    ColliderShape shape = ColliderShape::Box;
+    std::array<float, 3> center{}, size{1, 1, 1};
+    float radius = 0.5f, height = 2;
+};
+struct RigidBodyDefinition {
+    bool enabled = false;
+    BodyMotion motion = BodyMotion::Dynamic;
+    float mass = 1, friction = 0.5f, restitution = 0, gravityFactor = 1;
+    float linearDamping = 0.05f, angularDamping = 0.05f;
+    bool lockRotation = false, continuous = false;
+    std::array<float, 3> velocity{};
+};
 struct SceneEntity {
     EntityId id = 0, parent = 0;
     std::string name = "Object", asset;
@@ -55,6 +71,8 @@ struct SceneEntity {
     struct MaterialBinding { uint32_t slot = 0; std::string material; };
     std::vector<MaterialBinding> materials;
     std::vector<BehaviourDefinition> behaviours;
+    ColliderDefinition collider;
+    RigidBodyDefinition rigidBody;
 };
 struct SceneView {
     std::array<float, 4> background{0.055f, 0.07f, 0.11f, 1};

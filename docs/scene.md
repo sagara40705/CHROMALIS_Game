@@ -1,6 +1,6 @@
 # 最小Sceneの契約
 
-現在の保存版はv7。v6のPBR/Blend材質にBehaviour設定を追加し、v1〜6の読み込みを維持する。材質詳細は[materials.md](materials.md)。
+現在の保存版はv9。Collider/RigidBodyを追加し、v1〜8の読み込みを維持する。物理の契約は[physics.md](physics.md)。材質詳細は[materials.md](materials.md)。
 
 ## 所有権と依存
 
@@ -22,17 +22,17 @@ Simulationは`SetRuntimeTransform`で保存用Localと別の実行用Localを更
 左手系、1単位=1m、秒、行ベクトル・row-major。Localは位置・単位Quaternion・正のXYZ Scale。Local行列はS*R*T、WorldはLocal*ParentWorld。非一様Scaleと回転の合成をTRSへ分解し直さず行列で保持し、描画法線にはWorldの逆転置を使う。負/ゼロScaleは現段階では拒否する。小さな可逆Scaleは許容する。
 
 1. フレーム境界でEditor操作、同期reloadを適用する。
-2. AnimationPlayerがCPU姿勢とPaletteを更新する。DocumentのStart timeは初期値で、再生中の時刻とは別。
+2. Play中はBehaviour.Updateの後にJoltの固定時間更新を行い、物理所有のLocalを確定する。その後AnimationPlayerがCPU姿勢とPaletteを更新する。DocumentのStart timeは初期値で、再生中の時刻とは別。
 3. 親とSocket参照先が先になる順序でWorldを確定する。
 4. VFXのWorldを確定して演出を更新する。Root VFXのみ他の骨格オブジェクトのJoint名を参照し、位置のみ、または回転・Scaleを含む完全追従を選べる。完全追従時のLocal位置はSocket座標系のオフセット。
 5. RendererはフレームFence完了後にUploadを更新し、借用した描画リストを消費する。各骨格drawは別の256-byte整列Palette領域を使用する。
 6. 不透明モデル→VFX→UNORM RTVでImGui→Present。
 
-ReparentはLocal維持で、Worldは変化する。Deleteは子孫も削除する。削除対象を追従していたRoot VFXは追従を解除し、現在のWorld位置を保持する。Entity IDは削除しても再利用しない。将来のSimulationはWorldの書き手としてこの境界に接続し、AnimationやRendererが勝手にキャラクターの実移動を所有しない。Root Motion、衝突、攻撃判定は未実装。
+ReparentはLocal維持で、Worldは変化する。Deleteは子孫も削除する。削除対象を追従していたRoot VFXは追従を解除し、現在のWorld位置を保持する。Entity IDは削除しても再利用しない。将来のSimulationはWorldの書き手としてこの境界に接続し、AnimationやRendererが勝手にキャラクターの実移動を所有しない。Collider/RigidBodyの衝突は[physics.md](physics.md)を参照。Root Motionと攻撃判定は未実装。
 
 ## 保存・読み込み・更新
 
-`.cscene`はUTF-8 JSON。共通Animation参照・共有材質・照明・投影影・Behaviour設定を含むversion=8で保存し、旧version=1〜7も読み込む。v5ではplayに操作対象・カメラ対象・Clip・平面移動設定を保存する。材質の契約は[materials.md](materials.md)を参照。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
+`.cscene`はUTF-8 JSON。共通Animation参照・共有材質・照明・投影影・Behaviour設定を含むversion=9で保存し、旧version=1〜8も読み込む。v5ではplayに操作対象・カメラ対象・Clip・平面移動設定を保存する。材質の契約は[materials.md](materials.md)を参照。nlohmann/json 3.12.0（MIT）を公式アーカイブとSHA-256で固定し、ライセンスを配布先へコピーする。オフラインは`CHROMALIS_JSON_ARCHIVE`へ同じアーカイブを指定する。
 
 Entity IDは64bitの十進文字列。Asset表はID・static/skeletal/effect/animation・Sceneファイルからの相対パスを持つ。cmesh/cskin/canim内のIDとの一致も読み込み時に検査する。共通Skeleton・Clipの所有と互換性は[shared-animation.md](shared-animation.md)を参照。絶対パスは保存せず、Save Asで相対パスを再計算する。同一ボリューム上の配置を要求する。Sceneは信頼するローカル制作物であり、相対パスの`..`は許可する。
 

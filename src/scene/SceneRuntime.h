@@ -3,6 +3,7 @@
 #include "animation/AnimationPlayer.h"
 #include "runtime/Renderer.h"
 #include "runtime/VfxPlayer.h"
+#include "physics/PhysicsWorld.h"
 #include <memory>
 
 namespace chromalis {
@@ -37,6 +38,10 @@ public:
     // 保存用Documentを変更せず、次のUpdateで使う実行中のLocalを設定する。
     void SetRuntimeTransform(EntityId entity, const Transform& transform);
     const Transform& RuntimeTransform(EntityId entity) const;
+    void StartPhysics();
+    void StopPhysics();
+    void StepPhysics(float seconds);
+    PhysicsWorld* Physics() { return physics_.get(); }
     std::span<const DrawItem> DrawItems() const;
     void DrawEffects(ID3D12GraphicsCommandList* commands);
     AnimationPlayer* Animation(EntityId entity);
@@ -54,6 +59,7 @@ private:
     Renderer& renderer_;
     Log& log_;
     std::unique_ptr<State> state_;
+    std::unique_ptr<PhysicsWorld> physics_;
     std::filesystem::path path_;
     std::string status_ = "Empty scene";
     bool dirty_ = false;

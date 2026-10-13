@@ -10,6 +10,7 @@ ScenePlayback::ScenePlayback(ScenePlayback&& other) noexcept { *this = std::move
 ScenePlayback& ScenePlayback::operator=(ScenePlayback&& other) noexcept {
     if (this != &other) {
         Stop(); instances_ = std::move(other.instances_); scene_ = std::exchange(other.scene_, nullptr);
+        ownsPhysics_ = std::exchange(other.ownsPhysics_, false);
     }
     return *this;
 }
@@ -23,6 +24,8 @@ void ScenePlayback::Initialize(SceneRuntime& scene, const BehaviourRegistry& reg
         if (!definition.enabled) continue;
         const auto* type = registry.Find(definition.type);
         if (!type) throw std::runtime_error("Missing Behaviour: " + definition.type + " on " + entity.name);
+        if (type->writesTransform && entity.collider.enabled && (!entity.rigidBody.enabled || entity.rigidBody.motion != BodyMotion::Kinematic))
+            throw std::runtime_error("Transform-writing Behaviour requires a Kinematic RigidBody: " + entity.name);
         if (type->writesTransform && !transformWriters.insert(entity.id).second)
             throw std::runtime_error("Multiple Transform writers on " + entity.name);
         if (type->ownsCamera && std::exchange(cameraWriter, true)) throw std::runtime_error("Multiple camera owners");
@@ -31,6 +34,8 @@ void ScenePlayback::Initialize(SceneRuntime& scene, const BehaviourRegistry& reg
         candidate.instances_.push_back({entity.id, definition.type, std::move(instance), false});
     }
     // 全設定の検証・生成後にStartする。途中失敗した実体もStopで後始末する。
+    scene.StartPhysics();
+    candidate.ownsPhysics_ = true;
     const InputState input;
     for (auto& instance : candidate.instances_) {
         BehaviourContext context{scene, instance.entity, input};
@@ -46,6 +51,7 @@ void ScenePlayback::Update(SceneRuntime& scene, const InputState& input, float s
         BehaviourContext context{scene, instance.entity, input};
         instance.behaviour->Update(context, seconds);
     }
+    scene.StepPhysics(seconds);
 }
 void ScenePlayback::AfterPose(SceneRuntime& scene, const InputState& input, float seconds) {
     for (auto& instance : instances_) {
@@ -71,7 +77,8 @@ void ScenePlayback::Stop() noexcept {
             it->behaviour->Stop(context);
         }
     }
-    instances_.clear(); scene_ = nullptr;
+    if (scene_ && ownsPhysics_) scene_->StopPhysics();
+    instances_.clear(); scene_ = nullptr; ownsPhysics_ = false;
 }
 const Behaviour* ScenePlayback::Find(EntityId entity, const std::string& type) const {
     for (const auto& instance : instances_) if (instance.entity == entity && instance.type == type) return instance.behaviour.get();

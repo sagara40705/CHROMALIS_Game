@@ -17,6 +17,7 @@ public:
     const DirectX::XMFLOAT4X4& World(EntityId entity) const { return scene_.World(entity); }
     AnimationPlayer* Animation(EntityId entity) { return scene_.Animation(entity); }
     VfxPlayer* Effect(EntityId entity) { return scene_.Effect(entity); }
+    PhysicsWorld* Physics() { return scene_.Physics(); }
 private:
     SceneRuntime& scene_;
 };

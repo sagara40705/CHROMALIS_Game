@@ -73,6 +73,25 @@ void Run(const std::filesystem::path& root, Renderer& renderer, Log& log) {
     Reject([&] { playback.Initialize(scene,registry); });
     Require(counts.stop == 2, "Failed Start not cleaned up"); counts.fail = false;
     playback.Initialize(scene,registry); playback.Stop(); Require(counts.stop == 3, "Restart cleanup");
+    // Transformの所有権衝突と、物理作成後にStartが失敗した場合の巻き戻しを確認する。
+    bad = loaded; bad.Entity(id).collider.enabled = true;
+    Require(scene.Apply(bad), "Static conflict fixture");
+    Reject([&] { playback.Initialize(scene, registry); });
+    Require(!scene.Physics(), "Static writer conflict created physics");
+    bad.Entity(id).rigidBody.enabled = true;
+    Require(scene.Apply(bad), "Dynamic conflict fixture");
+    Reject([&] { playback.Initialize(scene, registry); });
+    bad.Entity(id).rigidBody.motion = BodyMotion::Kinematic;
+    Require(scene.Apply(bad), "Kinematic fixture");
+    counts.fail = true;
+    Reject([&] { playback.Initialize(scene, registry); });
+    Require(!scene.Physics(), "Failed Start leaked PhysicsWorld");
+    counts.fail = false; playback.Initialize(scene, registry);
+    const float initialX = scene.RuntimeTransform(id).position[0];
+    Require(std::abs(scene.Physics()->Poses()[0].transform.position[0] - initialX) < 0.001f, "Physics ignored current runtime Transform");
+    playback.Update(scene, input, 0.05f); scene.Update(0.05f); playback.AfterPose(scene, input, 0.05f);
+    Require(std::abs(scene.World(id)._41 - initialX - 0.1f) < 0.001f && scene.Physics()->Steps() == 3, "Kinematic Behaviour/physics order");
+    playback.Stop(); Require(!scene.Physics(), "Stop retained PhysicsWorld");
     // 別ビルドでEditor生成ソースを実装・登録した場合、そのままSceneから実行する。
     for (const auto& type : GameBehaviours().Types()) if (type.name == "AuthoredMotion") {
         scene.Clear();
