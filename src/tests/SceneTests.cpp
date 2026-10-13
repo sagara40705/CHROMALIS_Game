@@ -67,16 +67,37 @@ void Persistence(const std::filesystem::path& root) {
     scene.Entity(effect).effect.follow = model;
     scene.Entity(effect).effect.joint = "Hand";
     scene.Entity(model).animation.time = 0.25f;
+    MaterialSurface surface;
+    surface.shading = ShadingModel::Toon; surface.cutoff = 2; surface.alphaMask = true;
+    surface.emission = {0.1f, 0.2f, 0.3f};
+    scene.materials.push_back({"shared/toon", surface});
+    scene.Entity(model).materials.push_back({0, "shared/toon"});
+    scene.view.lighting.color = {1, 0.5f, 0.25f};
     const auto path = root / L"シーン.cscene";
     SaveScene(scene, path);
     const auto bytes = Read(path);
     const auto loaded = LoadScene(path);
+    Require(loaded.materials[0].surface == surface && loaded.Entity(model).materials[0].material == "shared/toon" &&
+        loaded.view.lighting.color == scene.view.lighting.color, "Material/light roundtrip failed");
     Require(loaded.Entity(effect).effect.follow == model && loaded.Entity(model).animation.time == 0.25f, "Roundtrip state");
     SaveScene(loaded, root / "nested/copy.cscene");
     Require(LoadScene(root / "nested/copy.cscene").Asset("model").path == scene.Asset("model").path, "Save As rebasing");
     auto bad = scene; bad.Entity(model).parent = effect;
     Reject([&] { SaveScene(bad, path); });
     Require(Read(path) == bytes, "Failed save damaged original");
+    bad = scene; bad.materials[0].surface.softness = 0;
+    Reject([&] { SaveScene(bad, path); });
+    bad = scene; bad.materials[0].surface.cutoff = -1;
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.materials[0].surface.emission[0] = std::numeric_limits<float>::quiet_NaN();
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.view.lighting.direction = {0, 0, 0};
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.Entity(model).materials.push_back({0, "shared/toon"});
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.Entity(model).materials[0].material = "missing";
+    Reject([&] { ValidateScene(bad); });
+    Require(Read(path) == bytes, "Invalid material save changed original");
     bad = scene; bad.assets[0].path = path;
     Reject([&] { SaveScene(bad, path); });
     Require(Read(path) == bytes, "Asset collision damaged original");
@@ -89,7 +110,7 @@ void Persistence(const std::filesystem::path& root) {
     std::filesystem::remove(alias);
     Reject([&] { SaveScene(scene, root / "texture.png"); });
     auto malformed = bytes;
-    const auto version = malformed.find("\"version\": 2");
+    const auto version = malformed.find("\"version\": 3");
     Require(version != std::string::npos, "Missing schema version");
     malformed.replace(version, 12, "\"version\": 9");
     { std::ofstream file(root / "bad.cscene"); file << malformed; }

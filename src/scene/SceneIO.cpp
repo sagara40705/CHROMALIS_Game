@@ -46,9 +46,17 @@ bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 Json Encode(const SceneDocument& document, const std::filesystem::path& destination) {
-    Json root{{"version", 2}, {"nextId", std::to_string(document.nextId)}};
+    Json root{{"version", 3}, {"nextId", std::to_string(document.nextId)}};
     const auto& view = document.view;
     root["view"] = {{"background", view.background}, {"yaw", view.yaw}, {"pitch", view.pitch}, {"distance", view.distance}, {"unlit", view.unlit}};
+    root["view"]["lighting"] = {{"direction", view.lighting.direction}, {"color", view.lighting.color}, {"ambient", view.lighting.ambient}};
+    root["materials"] = Json::array();
+    for (const auto& material : document.materials) {
+        const auto& m = material.surface;
+        root["materials"].push_back({{"id", material.id}, {"baseColor", m.baseColor}, {"emission", m.emission}, {"shadow", m.shadow},
+            {"shading", m.shading == ShadingModel::Lit ? "lit" : m.shading == ShadingModel::Unlit ? "unlit" : "toon"},
+            {"cutoff", m.cutoff}, {"threshold", m.threshold}, {"softness", m.softness}, {"alphaMask", m.alphaMask}, {"doubleSided", m.doubleSided}});
+    }
     root["assets"] = Json::array();
     const auto base = std::filesystem::absolute(destination).parent_path();
     for (const auto& asset : document.assets) {
@@ -66,6 +74,8 @@ Json Encode(const SceneDocument& document, const std::filesystem::path& destinat
             {"transform", {{"position", entity.local.position}, {"rotation", entity.local.rotation}, {"scale", entity.local.scale}}},
             {"animation", {{"library", a.library}, {"clip", a.clip}, {"time", a.time}, {"speed", a.speed}, {"loop", a.loop}, {"autoplay", a.autoplay}, {"restPose", a.restPose}, {"bindPose", a.bindPose}}},
             {"effect", {{"count", e.count}, {"autoplay", e.autoplay}, {"follow", std::to_string(e.follow)}, {"joint", e.joint}}}});
+        auto& bindings = root["entities"].back()["materials"] = Json::array();
+        for (const auto& binding : entity.materials) bindings.push_back({{"slot", binding.slot}, {"material", binding.material}});
     }
     return root;
 }
@@ -78,7 +88,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open scene");
         const auto root = Json::parse(stream);
-        if (root.at("version") != 1 && root.at("version") != 2) throw std::runtime_error("Unsupported scene version");
+        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3) throw std::runtime_error("Unsupported scene version");
         SceneDocument document;
         document.nextId = Id(root.at("nextId"));
         const auto& view = root.at("view");
@@ -87,6 +97,27 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         document.view.pitch = view.at("pitch").get<float>();
         document.view.distance = view.at("distance").get<float>();
         document.view.unlit = view.at("unlit").get<bool>();
+        if (root.at("version") == 3) {
+            const auto& lighting = view.at("lighting");
+            document.view.lighting = {lighting.at("direction").get<std::array<float, 3>>(),
+                lighting.at("color").get<std::array<float, 3>>(), lighting.at("ambient").get<std::array<float, 3>>()};
+            const auto& materials = root.at("materials");
+            if (!materials.is_array() || materials.size() > 4096) throw std::runtime_error("Invalid material collection");
+            for (const auto& value : materials) {
+                SceneDocument::Material material;
+                material.id = value.at("id");
+                auto& m = material.surface;
+                m.baseColor = value.at("baseColor").get<std::array<float, 4>>();
+                m.emission = value.at("emission").get<std::array<float, 3>>();
+                m.shadow = value.at("shadow").get<std::array<float, 3>>();
+                const auto shading = value.at("shading").get<std::string>();
+                if (shading != "lit" && shading != "unlit" && shading != "toon") throw std::runtime_error("Unknown shading model");
+                m.shading = shading == "lit" ? ShadingModel::Lit : shading == "unlit" ? ShadingModel::Unlit : ShadingModel::Toon;
+                m.cutoff = value.at("cutoff"); m.threshold = value.at("threshold"); m.softness = value.at("softness");
+                m.alphaMask = value.at("alphaMask"); m.doubleSided = value.at("doubleSided");
+                document.materials.push_back(std::move(material));
+            }
+        }
         const auto& assets = root.at("assets");
         const auto& entities = root.at("entities");
         if (!assets.is_array() || !entities.is_array() || assets.size() > 10000 || entities.size() > 10000) throw std::runtime_error("Invalid scene collections");
@@ -109,6 +140,15 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
                 a.at("loop").get<bool>(), a.at("autoplay").get<bool>(), a.at("restPose").get<bool>(), a.at("bindPose").get<bool>(), a.value("library", std::string{})};
             const auto& e = value.at("effect");
             entity.effect = {e.at("count").get<int>(), e.at("autoplay").get<bool>(), Id(e.at("follow")), e.at("joint").get<std::string>()};
+            if (root.at("version") == 3) {
+                const auto& bindings = value.at("materials");
+                if (!bindings.is_array() || bindings.size() > 4096) throw std::runtime_error("Invalid material bindings");
+                for (const auto& binding : bindings) {
+                    const auto& slot = binding.at("slot");
+                    if (!slot.is_number_unsigned() || slot.get<uint64_t>() > UINT32_MAX) throw std::runtime_error("Invalid material slot");
+                    entity.materials.push_back({slot.get<uint32_t>(), binding.at("material").get<std::string>()});
+                }
+            }
             document.entities.push_back(std::move(entity));
         }
         ValidateScene(document);

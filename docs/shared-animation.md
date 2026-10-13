@@ -14,7 +14,7 @@
 
 Scene Entityの`asset`はモデルID、`animation.library`は共通ライブラリID。空ならモデル内蔵Clipを使う。Clipを持たないモデルはRest姿勢のプレビューが可能。GPUハンドルを保存形式の識別子に使わない。
 
-`.canim`はCHAN v1の最小バイナリ形式。`.cskin`はクリップなしモデルを認めるCHRS v2へ更新し、旧v1も読み込む。`.cscene`はlibrary参照を保存するv2で、旧v1も読み込む。旧アプリへの逆互換はない。`.cmesh`は変更しない。
+`.canim`はCHAN v1の最小バイナリ形式。`.cskin`はクリップなしモデルを認めるCHRS v2へ更新し、旧v1も読み込む。`.cscene`のlibrary参照はv2で導入した。現在は[材質と照明](materials.md)を含むv3で保存し、旧v1/v2も読み込む。旧アプリへの逆互換はない。`.cmesh`は変更しない。
 
 ## DCC側の共通Skeleton契約
 

@@ -59,6 +59,7 @@ struct SceneRuntime::State {
     std::vector<DirectX::XMFLOAT4X4> worlds;
     std::vector<size_t> parents, follows, joints;
     std::vector<DrawItem> draws;
+    std::vector<std::vector<MaterialSurface>> materials;
 };
 
 SceneRuntime::SceneRuntime(Renderer& renderer, Log& log) : renderer_(renderer), log_(log), state_(std::make_unique<State>()) {}
@@ -109,6 +110,19 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
             candidate->assets.emplace(source.id, std::move(asset));
         }
         for (const auto& entity : candidate->document.entities) {
+            // 材質は候補Sceneの値として解決し、共有中のPlayerや旧Sceneへ書き込まない。
+            std::vector<MaterialSurface> surfaces;
+            if (!entity.materials.empty()) {
+                const auto defaults = renderer_.MeshMaterials(candidate->assets.at(entity.asset)->mesh);
+                for (const auto& material : defaults) surfaces.push_back(ImportedSurface(material));
+                for (const auto& binding : entity.materials) {
+                    if (binding.slot >= surfaces.size()) throw std::runtime_error("Material slot out of range on entity: " + entity.name);
+                    const auto found = std::find_if(candidate->document.materials.begin(), candidate->document.materials.end(),
+                        [&](const auto& material) { return material.id == binding.material; });
+                    surfaces[binding.slot] = found->surface;
+                }
+            }
+            candidate->materials.push_back(std::move(surfaces));
             auto instance = std::make_shared<Instance>();
             if (!entity.asset.empty()) {
                 instance->asset = candidate->assets.at(entity.asset);
@@ -240,6 +254,7 @@ bool SceneRuntime::AssignAsset(EntityId entity, const SceneAsset& asset) {
         target.animation = {}; target.animation.library = asset.id;
     } else {
         if (target.asset != asset.id) {
+            target.materials.clear();
             if (asset.kind != SceneAssetKind::Skeletal || target.animation.library.empty()) target.animation = {};
             target.effect = {};
         }
@@ -304,7 +319,7 @@ void SceneRuntime::UpdateState(State& state, float seconds, bool advance) {
             }
             if (advance) instance.effect->UpdateMatrix(seconds, state.worlds[i]);
         } else {
-            DrawItem item{instance.asset->mesh, state.worlds[i], {}, {}};
+            DrawItem item{instance.asset->mesh, state.worlds[i], {}, {}, state.materials[i]};
             if (instance.animation) {
                 item.bones = instance.animation->Palette();
                 item.normals = instance.animation->Normals();
@@ -314,6 +329,19 @@ void SceneRuntime::UpdateState(State& state, float seconds, bool advance) {
     }
 }
 std::span<const DrawItem> SceneRuntime::DrawItems() const { return state_->draws; }
+std::span<const MeshMaterial> SceneRuntime::ImportedMaterials(EntityId entity) const {
+    const auto found = state_->indices.find(entity);
+    if (found == state_->indices.end()) return {};
+    const auto& asset = state_->instances[found->second]->asset;
+    if (!asset || asset->mesh.slot == UINT32_MAX) return {};
+    return renderer_.MeshMaterials(asset->mesh);
+}
+size_t SceneRuntime::MaterialUseCount(EntityId entity, uint32_t slot) const {
+    const auto found = state_->indices.find(entity);
+    if (found == state_->indices.end()) return 0;
+    const auto& asset = state_->instances[found->second]->asset;
+    return !asset || asset->mesh.slot == UINT32_MAX ? 0 : renderer_.MaterialUseCount(asset->mesh, slot);
+}
 void SceneRuntime::DrawEffects(ID3D12GraphicsCommandList* commands) {
     for (const auto& instance : state_->instances)
         if (instance->effect) instance->effect->Draw(renderer_.CurrentFrame(), commands, renderer_.View(), renderer_.Projection());

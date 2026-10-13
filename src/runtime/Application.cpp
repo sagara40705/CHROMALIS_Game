@@ -274,6 +274,7 @@ public:
                 const auto& view = activeScene.Document().view;
                 settings_.cameraYaw = view.yaw; settings_.cameraPitch = view.pitch; settings_.cameraDistance = view.distance;
                 settings_.clear = view.background; settings_.unlit = view.unlit;
+                settings_.lighting = view.lighting;
             }
             if (overlay_) overlay_->ConfigureView(settings_);
             auto* list = renderer_.BeginFrame(settings_, activeScene.DrawItems(), settings_.diagnosticTriangle);

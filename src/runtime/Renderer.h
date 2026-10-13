@@ -2,6 +2,7 @@
 #include "runtime/Diagnostics.h"
 #include "assets/StaticAsset.h"
 #include "assets/SkeletalAsset.h"
+#include "assets/Material.h"
 #include <DirectXMath.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -21,8 +22,10 @@ struct DrawItem {
     MeshHandle mesh;
     DirectX::XMFLOAT4X4 world;
     std::span<const DirectX::XMFLOAT4X4> bones, normals;
+    std::span<const MaterialSurface> materials;
 };
 struct RenderSettings {
+    SceneLighting lighting;
     std::array<float, 4> clear{0.055f, 0.07f, 0.11f, 1.0f};
     float x = 0, y = 0, scale = 1;
     bool vsync = true;
@@ -57,6 +60,8 @@ public:
     void DrainDiagnostics();
     MeshHandle CreateMesh(const StaticAsset& asset, const std::vector<SkinVertex>* skin = nullptr);
     void ReleaseMesh(MeshHandle mesh);
+    std::span<const MeshMaterial> MeshMaterials(MeshHandle mesh) const;
+    size_t MaterialUseCount(MeshHandle mesh, uint32_t slot) const;
     UINT CurrentFrame() const { return frameIndex_; }
     const DirectX::XMFLOAT4X4& View() const { return view_; }
     const DirectX::XMFLOAT4X4& Projection() const { return projection_; }
@@ -78,6 +83,9 @@ private:
         ComPtr<ID3D12Resource> bones;
         std::byte* bonesMapped = nullptr;
         UINT64 boneCapacity = 256 * 128;
+        ComPtr<ID3D12Resource> materialConstants;
+        std::byte* materialsMapped = nullptr;
+        UINT64 materialCapacity = 0;
         ComPtr<ID3D12Resource> timestamps;
         UINT64 fence = 0;
     };
@@ -87,6 +95,7 @@ private:
     void CreateDepth();
     void DrawModels(const RenderSettings& settings, std::span<const DrawItem> items);
     void PrepareBoneUpload(std::span<const DrawItem> items);
+    void PrepareMaterialUpload(std::span<const DrawItem> items);
     void WaitFor(UINT64 value);
     void Transition(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after);
     void PrepareCapture();

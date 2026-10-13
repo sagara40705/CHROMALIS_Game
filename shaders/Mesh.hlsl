@@ -3,7 +3,13 @@ cbuffer DrawConstants : register(b0) {
     row_major float4x4 world;
     row_major float4x4 normalWorld;
     float4 baseColor;
-    float4 options; // cutoff, alphaMask, unlit, unused
+    float4 options; // 閾値、MASK、シェーディング方式、予約
+    float4 emission;
+    float4 toon; // 明暗境界、境界の幅
+    float4 shadowColor;
+    float4 lightDirection;
+    float4 lightColor;
+    float4 ambientColor;
 };
 Texture2D<float4> baseTexture : register(t0);
 SamplerState baseSampler : register(s0);
@@ -35,7 +41,12 @@ float4 ps_main(VSOutput v, bool front : SV_IsFrontFace) : SV_Target {
     float4 color = baseTexture.Sample(baseSampler,v.uv)*baseColor;
     if (options.y > 0.5) clip(color.a-options.x);
     float3 n = normalize(v.normal)*(front ? 1 : -1);
-    float light = options.z > 0.5 ? 1 : 0.3+0.7*saturate(dot(n,normalize(float3(-0.4,0.8,-0.6))));
+    float ndotl = saturate(dot(n, normalize(lightDirection.xyz)));
+    float3 light = ambientColor.rgb + lightColor.rgb * ndotl;
+    if (options.z > 1.5) {
+        float band = smoothstep(toon.x - toon.y, toon.x + toon.y, ndotl);
+        light = ambientColor.rgb + lightColor.rgb * lerp(shadowColor.rgb, 1.0, band);
+    } else if (options.z > 0.5) light = 1;
     // sRGB RTVが線形合成後の出力変換を担当する。
-    return float4(saturate(color.rgb*light),1);
+    return float4(saturate(color.rgb * light + emission.rgb), 1);
 }

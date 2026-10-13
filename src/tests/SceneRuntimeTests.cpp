@@ -31,6 +31,7 @@ void Frame(Renderer& renderer, SceneRuntime& scene, bool capture = false) {
     RenderSettings settings;
     settings.clear = view.background; settings.cameraYaw = view.yaw; settings.cameraPitch = view.pitch;
     settings.cameraDistance = view.distance; settings.unlit = view.unlit;
+    settings.lighting = view.lighting;
     auto* commands = renderer.BeginFrame(settings, scene.DrawItems());
     scene.DrawEffects(commands); renderer.BeginOverlay(); renderer.EndFrame(false, capture);
 }
@@ -96,6 +97,88 @@ void IndependentPalettes(Renderer& renderer, SceneRuntime& scene, const std::fil
     Require(scene.Delete(1) && scene.Delete(2), "Shared user deletion failed");
     Require(scene.Document().Asset("scene/shared").kind == SceneAssetKind::Animation, "Deleting one user removed shared library");
     Require(scene.Delete(3) && scene.Document().assets.empty(), "Unused shared library was retained");
+}
+void Materials(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& skin, const std::filesystem::path& root) {
+    auto model = LoadSkeletalAsset(skin);
+    auto& mesh = model.mesh;
+    mesh.id = "test/material-slots";
+    mesh.textures = {{1, 1, {128, 64, 192, 255}}};
+    mesh.materials.resize(2); mesh.materials[0].unlit = mesh.materials[1].unlit = 0;
+    const auto original = mesh.vertices;
+    mesh.vertices.clear();
+    for (float offset : {-1.2f, 1.2f}) for (auto vertex : original) { vertex.position[0] += offset; mesh.vertices.push_back(vertex); }
+    mesh.indices = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+    mesh.parts = {{0, 6, 0}, {6, 6, 1}};
+    model.skin.resize(8); model.clips[0].channels[0].keys[1].value[0] = 0;
+    const auto staticPath = root / "materials.cmesh", skinPath = root / "materials.cskin";
+    SaveStaticAsset(mesh, staticPath); SaveSkeletalAsset(model, skinPath);
+    SceneDocument document;
+    document.view.yaw = document.view.pitch = 0; document.view.distance = 6;
+    document.view.lighting.direction = {0, 0, -1};
+    document.view.lighting.color = {0.6f, 0.6f, 0.6f}; document.view.lighting.ambient = {0.1f, 0.1f, 0.1f};
+    MaterialSurface unlit, toon;
+    unlit.shading = ShadingModel::Unlit; unlit.baseColor = {0.5f, 0.25f, 0.75f, 1}; unlit.emission = {0.02f, 0.04f, 0.01f};
+    toon.shading = ShadingModel::Toon; toon.shadow = {0.2f, 0.3f, 0.4f};
+    document.materials = {{"test/unlit", unlit}, {"test/toon", toon}};
+    const auto id = document.Add("Two material slots");
+    document.Entity(id).asset = mesh.id;
+    document.Entity(id).materials = {{0, "test/unlit"}, {1, "test/toon"}};
+    const auto decode = [](double value) { value /= 255; return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4); };
+    const auto encode = [](double value) { return static_cast<int>(std::lround(255 * (value <= 0.0031308 ? value * 12.92 : 1.055 * std::pow(value, 1 / 2.4) - 0.055))); };
+    const std::array<double, 3> texture{decode(128), decode(64), decode(192)};
+    const auto capture = root / "materials.bmp";
+    const auto verify = [&](float x, const std::array<double, 3>& expected) {
+        std::ifstream file(capture, std::ios::binary);
+        BITMAPFILEHEADER header{}; file.read(reinterpret_cast<char*>(&header), sizeof(header));
+        const float focal = renderer.Height() * 0.5f / std::tan(DirectX::XM_PIDIV4 * 0.5f);
+        const auto px = static_cast<int>(renderer.Width() * 0.5f + focal * x / 5);
+        file.seekg(header.bfOffBits + (static_cast<std::streamoff>(renderer.Height() / 2) * renderer.Width() + px) * 4);
+        unsigned char pixel[4]{}; file.read(reinterpret_cast<char*>(pixel), 4);
+        Require(file.good(), "Material capture read failed");
+        for (size_t c = 0; c < 3; ++c) Require(std::abs(int(pixel[2 - c]) - encode(expected[c])) <= 3, "Linear material/toon pixel mismatch");
+    };
+    // 同じ2スロットを静的/骨格モデルで検査し、各PrimitiveのCBV独立性も確認する。
+    for (const bool skinned : {false, true}) {
+        document.assets = {{mesh.id, skinned ? SceneAssetKind::Skeletal : SceneAssetKind::Static, skinned ? skinPath : staticPath}};
+        document.view.lighting.direction = {0, 0, -1};
+        Require(scene.Apply(document), "Material scene setup failed");
+        for (int i = 0; i < 6; ++i) Frame(renderer, scene, i == 5);
+        renderer.SaveCapture(capture, false);
+        verify(-1.2f, {texture[0] * 0.5 + 0.02, texture[1] * 0.25 + 0.04, texture[2] * 0.75 + 0.01});
+        verify(1.2f, {texture[0] * 0.7, texture[1] * 0.7, texture[2] * 0.7});
+        const auto player = scene.Animation(id);
+        const auto time = player ? player->playback.time : 0;
+        const auto generation = scene.Generation(id);
+        document.view.lighting.direction = {0, 0, 1};
+        Require(scene.Apply(document) && scene.Generation(id) == generation && scene.Animation(id) == player, "Material edit recreated resources/player");
+        if (player) Require(player->playback.time == time, "Material edit reset animation time");
+        Frame(renderer, scene, true); renderer.SaveCapture(capture, false);
+        verify(1.2f, {texture[0] * 0.22, texture[1] * 0.28, texture[2] * 0.34});
+        auto bad = document; bad.Entity(id).materials[0].slot = 99;
+        Require(!scene.Apply(bad) && scene.Generation(id) == generation, "Invalid material slot damaged old scene");
+        bad = document; bad.materials.clear();
+        Require(!scene.Apply(bad), "Dangling material accepted");
+        document.materials[1].surface.alphaMask = true; document.materials[1].surface.cutoff = 2;
+        Require(scene.Apply(document), "Cutoff greater than one rejected");
+        Frame(renderer, scene, true); renderer.SaveCapture(capture, false);
+        const auto& background = document.view.background;
+        verify(1.2f, {decode(background[0] * 255), decode(background[1] * 255), decode(background[2] * 255)});
+        document.materials[1].surface = toon;
+    }
+    // 定義の共有更新が全利用者へ届き、コピー作成で個別編集へ分離できる。
+    const auto second = document.Add("Shared material user");
+    document.Entity(second).asset = mesh.id;
+    document.Entity(second).materials = {{0, "test/unlit"}};
+    document.Entity(second).local.position = {0, 3, 0};
+    document.materials[0].surface.baseColor = {0.1f, 0.2f, 0.3f, 1};
+    Require(scene.Apply(document), "Shared material application failed");
+    Require(scene.DrawItems()[0].materials[0].baseColor == scene.DrawItems()[1].materials[0].baseColor, "Shared definition did not update all users");
+    document.materials.push_back({"test/unique", document.materials[0].surface});
+    document.materials.back().surface.baseColor[0] = 0.9f;
+    document.Entity(second).materials[0].material = "test/unique";
+    Require(scene.Apply(document), "Unique material copy failed");
+    Require(scene.DrawItems()[0].materials[0].baseColor[0] == 0.1f && scene.DrawItems()[1].materials[0].baseColor[0] == 0.9f,
+        "Unique definition changed shared material");
 }
 void NormalTransform(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& skin, const std::filesystem::path& root) {
     auto mesh = LoadSkeletalAsset(skin).mesh;
@@ -220,6 +303,7 @@ int wmain(int argc, wchar_t** argv) {
         Require(IsIconic(window.handle) == FALSE, "Window did not restore");
         Frame(renderer, scene);
         NormalTransform(renderer, scene, std::filesystem::absolute(argv[4]), root);
+        Materials(renderer, scene, std::filesystem::absolute(argv[4]), root);
         Transactions(renderer, scene, Example(cube, std::filesystem::absolute(argv[3]), std::filesystem::absolute(argv[5])), root);
         std::cout << "PASS: independent GPU palettes, shared resources, hierarchy, reload rollback, socket detach, persistence, resize, release\n";
         return 0;

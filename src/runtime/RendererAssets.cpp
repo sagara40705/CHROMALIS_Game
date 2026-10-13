@@ -3,6 +3,7 @@
 #include "Mesh_ps.h"
 #include "Skin_vs.h"
 #include <cstring>
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <stdexcept>
@@ -81,8 +82,8 @@ void Renderer::CreateMeshPipeline() {
     D3D12_DESCRIPTOR_RANGE srv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0};
     D3D12_DESCRIPTOR_RANGE sampler{D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,1,0,0,0};
     D3D12_ROOT_PARAMETER parameters[4]{};
-    parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    parameters[0].Constants = {0,0,56}; parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    parameters[0].Descriptor = {0,0}; parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     parameters[1].ParameterType = parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     parameters[1].DescriptorTable = {1,&srv}; parameters[2].DescriptorTable = {1,&sampler};
     parameters[1].ShaderVisibility = parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -250,12 +251,21 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
     const auto srvStride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     const auto samplerStride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     UINT64 paletteOffset = 0;
+    UINT64 materialOffset = 0;
+    auto& frame = frames_[frameIndex_];
     for (const auto& item : items) {
         const auto& model = *meshes_[item.mesh.slot].model;
         const bool skinned = !item.bones.empty();
         const auto world = XMLoadFloat4x4(&item.world);
-        struct Constants { XMFLOAT4X4 wvp, world, normalWorld; std::array<float, 4> color, options; } constants;
-        static_assert(sizeof(Constants) == 224);
+        struct Constants {
+            XMFLOAT4X4 wvp, world, normalWorld;
+            std::array<float, 4> color, options, emission, toon, shadow, lightDirection, lightColor, ambient;
+        } constants{};
+        static_assert(sizeof(Constants) == 320);
+        const auto vector4 = [](const std::array<float, 3>& v) { return std::array<float, 4>{v[0], v[1], v[2], 0}; };
+        constants.lightDirection = vector4(settings.lighting.direction);
+        constants.lightColor = vector4(settings.lighting.color);
+        constants.ambient = vector4(settings.lighting.ambient);
         XMStoreFloat4x4(&constants.wvp, world * XMLoadFloat4x4(&view_) * XMLoadFloat4x4(&projection_));
         constants.world = item.world;
         XMStoreFloat4x4(&constants.normalWorld, XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
@@ -264,7 +274,6 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
         list_->IASetVertexBuffers(0, 1, &model.vb);
         list_->IASetIndexBuffer(&model.ib);
         if (skinned) {
-            auto& frame = frames_[frameIndex_];
             std::memcpy(frame.bonesMapped + paletteOffset, item.bones.data(), item.bones.size_bytes());
             std::memcpy(frame.bonesMapped + paletteOffset + 256 * 64, item.normals.data(), item.normals.size_bytes());
             list_->SetGraphicsRootConstantBufferView(3, frame.bones->GetGPUVirtualAddress() + paletteOffset);
@@ -273,10 +282,17 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
         }
         for (const auto& part : model.parts) {
             const auto& material = model.materials[part.material];
-            constants.color = material.baseColor;
-            constants.options = {material.cutoff, static_cast<float>(material.alphaMask), (settings.unlit || material.unlit) ? 1.0f : 0.0f, 0};
-            list_->SetPipelineState(skinned ? skinPso_[material.doubleSided].Get() : meshPso_[material.doubleSided].Get());
-            list_->SetGraphicsRoot32BitConstants(0, 56, &constants, 0);
+            const auto surface = item.materials.empty() ? ImportedSurface(material) : item.materials[part.material];
+            constants.color = surface.baseColor;
+            constants.options = {surface.cutoff, surface.alphaMask ? 1.0f : 0.0f,
+                settings.unlit ? 1.0f : static_cast<float>(surface.shading), 0};
+            constants.emission = vector4(surface.emission);
+            constants.toon = {surface.threshold, surface.softness, 0, 0};
+            constants.shadow = vector4(surface.shadow);
+            list_->SetPipelineState(skinned ? skinPso_[surface.doubleSided].Get() : meshPso_[surface.doubleSided].Get());
+            std::memcpy(frame.materialsMapped + materialOffset, &constants, sizeof(constants));
+            list_->SetGraphicsRootConstantBufferView(0, frame.materialConstants->GetGPUVirtualAddress() + materialOffset);
+            materialOffset += 512;
             auto texture = model.srv->GetGPUDescriptorHandleForHeapStart();
             texture.ptr += UINT64(material.texture) * srvStride;
             auto sampler = model.samplers->GetGPUDescriptorHandleForHeapStart();
@@ -286,5 +302,39 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
             list_->DrawIndexedInstanced(part.indexCount, 1, part.firstIndex, 0, 0);
         }
     }
+}
+std::span<const MeshMaterial> Renderer::MeshMaterials(MeshHandle mesh) const {
+    const auto& entry = meshes_.at(mesh.slot);
+    if (!entry.model || entry.generation != mesh.generation) throw std::runtime_error("Stale material mesh handle");
+    return entry.model->materials;
+}
+void Renderer::PrepareMaterialUpload(std::span<const DrawItem> items) {
+    UINT64 required = 0;
+    for (const auto& item : items) {
+        const auto& model = *meshes_[item.mesh.slot].model;
+        if (!item.materials.empty() && item.materials.size() != model.materials.size())
+            throw std::runtime_error("Draw material count does not match mesh");
+        required += model.parts.size() * 512;
+    }
+    auto& frame = frames_[frameIndex_];
+    if (required <= frame.materialCapacity) return;
+    // フレームFence完了後に確保し、各Primitiveを256バイト境界の独立領域へ書く。
+    const auto heap = HeapType(D3D12_HEAP_TYPE_UPLOAD);
+    const auto desc = Buffer(required);
+    ComPtr<ID3D12Resource> candidate;
+    Check(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&candidate)), "Grow frame material constants");
+    std::byte* mapped = nullptr;
+    D3D12_RANGE noRead{0, 0};
+    Check(candidate->Map(0, &noRead, reinterpret_cast<void**>(&mapped)), "Map material constants");
+    if (frame.materialsMapped) frame.materialConstants->Unmap(0, nullptr);
+    frame.materialConstants = std::move(candidate);
+    frame.materialsMapped = mapped;
+    frame.materialCapacity = required;
+}
+size_t Renderer::MaterialUseCount(MeshHandle mesh, uint32_t slot) const {
+    (void)MeshMaterials(mesh);
+    const auto& parts = meshes_[mesh.slot].model->parts;
+    return static_cast<size_t>(std::count_if(parts.begin(), parts.end(), [&](const auto& part) { return part.material == slot; }));
 }
 }

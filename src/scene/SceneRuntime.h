@@ -37,6 +37,8 @@ public:
     void DrawEffects(ID3D12GraphicsCommandList* commands);
     AnimationPlayer* Animation(EntityId entity);
     VfxPlayer* Effect(EntityId entity);
+    std::span<const MeshMaterial> ImportedMaterials(EntityId entity) const;
+    size_t MaterialUseCount(EntityId entity, uint32_t slot) const;
     const DirectX::XMFLOAT4X4& World(EntityId entity) const;
     uint64_t Generation(EntityId entity) const;
     EntityId Pick(const DirectX::XMFLOAT3& origin, const DirectX::XMFLOAT3& direction) const;

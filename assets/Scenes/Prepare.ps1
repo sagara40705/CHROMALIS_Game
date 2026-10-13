@@ -12,3 +12,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Character cook failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Common animation cook failed' }
 Write-Output (Join-Path $PSScriptRoot 'Example.cscene')
 Write-Output (Join-Path $PSScriptRoot 'SharedAnimation.cscene')
+Write-Output (Join-Path $PSScriptRoot 'Materials.cscene')

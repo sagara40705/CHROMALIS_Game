@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include "assets/Material.h"
 
 namespace chromalis {
 using EntityId = uint64_t;
@@ -40,11 +41,14 @@ struct SceneEntity {
     Transform local;
     AnimationInitialState animation;
     EffectInitialState effect;
+    struct MaterialBinding { uint32_t slot = 0; std::string material; };
+    std::vector<MaterialBinding> materials;
 };
 struct SceneView {
     std::array<float, 4> background{0.055f, 0.07f, 0.11f, 1};
     float yaw = 0.35f, pitch = 0.25f, distance = 7;
     bool unlit = false;
+    SceneLighting lighting;
 };
 
 // 制作時の状態だけを保持する。再生中の時刻とGPU参照は保存しない。
@@ -53,6 +57,8 @@ struct SceneDocument {
     SceneView view;
     std::vector<SceneAsset> assets;
     std::vector<SceneEntity> entities;
+    struct Material { std::string id; MaterialSurface surface; };
+    std::vector<Material> materials;
     const SceneEntity& Entity(EntityId id) const;
     SceneEntity& Entity(EntityId id);
     const SceneAsset& Asset(const std::string& id) const;

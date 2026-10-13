@@ -31,6 +31,7 @@ Renderer::~Renderer() {
     try { WaitIdle(); } catch (const std::exception& e) { log_.Write(e.what()); }
     for (auto& frame : frames_) if (frame.mapped) frame.constants->Unmap(0, nullptr);
     for (auto& frame : frames_) if (frame.bonesMapped) frame.bones->Unmap(0,nullptr);
+    for (auto& frame : frames_) if (frame.materialsMapped) frame.materialConstants->Unmap(0, nullptr);
     if (fenceEvent_) CloseHandle(fenceEvent_);
 }
 void Renderer::Initialize(HWND window, UINT width, UINT height, const RendererOptions& options) {
@@ -240,6 +241,8 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, 
     const auto start = std::chrono::steady_clock::now();
     WaitFor(frame.fence);
     PrepareBoneUpload(items);
+    ValidateLighting(settings.lighting);
+    PrepareMaterialUpload(items);
     if(frame.fence) {
         UINT64* times=nullptr;D3D12_RANGE range{0,16};Check(frame.timestamps->Map(0,&range,reinterpret_cast<void**>(&times)),"Read completed GPU timestamps");
         gpuFrameMs_=static_cast<double>(times[1]-times[0])*1000.0/static_cast<double>(timestampFrequency_);D3D12_RANGE noWrite{0,0};frame.timestamps->Unmap(0,&noWrite);

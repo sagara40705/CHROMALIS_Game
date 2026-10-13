@@ -120,6 +120,14 @@ std::vector<XMFLOAT4X4> EvaluateWorlds(const SceneDocument& document, const std:
     return result;
 }
 void ValidateScene(const SceneDocument& document) {
+    ValidateLighting(document.view.lighting);
+    Require(document.materials.size() <= 4096, "Scene exceeds 4096 material definitions");
+    std::unordered_set<std::string> materialIds;
+    for (const auto& material : document.materials) {
+        Require(!material.id.empty() && material.id.size() <= 256 && materialIds.insert(material.id).second, "Invalid/duplicate material ID");
+        Require(material.id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/.") == std::string::npos, "Invalid material ID characters");
+        ValidateMaterial(material.surface);
+    }
     Require(document.entities.size() <= 10000 && document.assets.size() <= 10000, "Scene exceeds 10000 objects/assets");
     Require(document.nextId != 0, "Invalid next entity ID");
     Finite(document.view.background);
@@ -134,6 +142,12 @@ void ValidateScene(const SceneDocument& document) {
     }
     const auto order = SceneOrder(document);
     for (const auto& entity : document.entities) {
+        Require(entity.materials.size() <= 4096, "Too many material bindings");
+        std::unordered_set<uint32_t> slots;
+        for (const auto& binding : entity.materials) {
+            Require(!entity.asset.empty() && (document.Asset(entity.asset).kind == SceneAssetKind::Static || document.Asset(entity.asset).kind == SceneAssetKind::Skeletal), "Material requires a model");
+            Require(slots.insert(binding.slot).second && materialIds.contains(binding.material), "Duplicate slot or missing material reference");
+        }
         Require(entity.id < document.nextId, "nextId must exceed every entity ID");
         Require(!entity.name.empty() && entity.name.size() <= 256, "Invalid entity name");
         Finite(entity.local.position); Finite(entity.local.rotation); Finite(entity.local.scale);
