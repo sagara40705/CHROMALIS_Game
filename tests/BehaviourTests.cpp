@@ -31,7 +31,10 @@ void Run(const std::filesystem::path& root, Renderer& renderer, Log& log) {
     Counts counts;
     BehaviourRegistry registry;
     registry.Add({"Probe", {{"speed",2.0f,0,100},{"target","0",0,0,BehaviourFieldKind::Entity}},
-        [&](const BehaviourSettings& settings) { return std::make_unique<Probe>(counts, settings.at("speed").get<float>()); },true,false,1,{}}, "test.probe");
+        [&](const BehaviourSettings& settings) { return std::make_unique<Probe>(counts, settings.at("speed").get<float>()); },true,false,1,{}}, "test.probe", "RegisteredProbe.cpp");
+    // 表示ファイル名を変更しても実行名・Sceneの識別子は変更しない。
+    Require(registry.Find("test.probe")->sourceFilename == "RegisteredProbe.cpp" && registry.Find("test.probe")->name == "Probe", "Behaviour file metadata replaced runtime name");
+    Require(GameBehaviours().Find("chromalis.player")->sourceFilename == "PlayerController.cpp", "Generated registration lost source filename");
     SceneDocument document; document.legacyBehaviours = false;
     const auto id = document.Add("Object");
     // 移行済みSceneでは旧player参照を実行しない。Behaviourを外せば空オブジェクトにも戻せる。

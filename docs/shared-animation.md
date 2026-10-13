@@ -48,4 +48,4 @@ Assetsパネルの種類にShared animationを追加した。制作元glTF/GLB�
 
 ライブラリは読込時にozz形式へ一度構築する。モデルごと・フレームごとの重複構築はしないが、Scene間のキャッシュは導入していない。編集SceneとPlayコピーは引き続き独立。Runtimeのozz offline builder依存も維持する。大量Clip向けの事前圧縮保存は別途判断する。
 
-今回の範囲は制作元の分離・共通データの再利用・再生/更新の基盤。複数ソースのClip結合、Clip範囲の切り出し、クロスフェード、状態機械、Animation Event、Root Motion移動、IK、Retargetingは未実装。Socketは従来の位置取得のみ。これらを対応済みとして扱わない。
+今回の範囲は制作元の分離・共通データの再利用・再生/更新の基盤。複数ソースのClip結合、Clip範囲の切り出し、状態機械、Animation Event、Root Motion移動、IK、Retargetingは未実装。クロスフェード・再生API・Socket行列の追加は[基本再生とClip遷移](animation-playback.md)を参照。

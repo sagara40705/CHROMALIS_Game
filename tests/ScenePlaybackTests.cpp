@@ -107,11 +107,15 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
     Require(std::abs(std::hypot(dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[0], dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[2])-ScenePlaySettings{}.walkSpeed * walkFrames / 60) < 0.001f, "Walk distance");
     const auto walkPalette = player->Palette();
     input.down[VK_SHIFT] = true;
-    for (int i = 0; i < 60; ++i) {
-        frame(input, i == 15 ? "run.bmp" : nullptr);
-        if (foot != joints.end() && (i == 3 || i == 12)) {
+    const auto run = std::find_if(player->Clips().begin(), player->Clips().end(), [&](const auto& clip) { return clip.name == scene.Document().play.clips[2]; });
+    const int runCycleFrames = static_cast<int>(std::lround(run->duration * 60));
+    const int runFrames = std::max(60, runCycleFrames + 13);
+    for (int i = 0; i < runFrames; ++i) {
+        frame(input, i == 5 ? "transition.bmp" : i == 15 ? "run.bmp" : nullptr);
+        // 速度と足運びの対応は遷移後の同じ接地位相で測る。混合中の滑りとは分離する。
+        if (foot != joints.end() && (i == runCycleFrames + 3 || i == runCycleFrames + 12)) {
             const auto point = player->Socket(static_cast<size_t>(foot-joints.begin()), scene.World(1));
-            if (i == 3) stanceStart = point;
+            if (i == runCycleFrames + 3) stanceStart = point;
             else {
                 const float slide = std::hypot(point.x-stanceStart.x, point.z-stanceStart.z);
                 std::cout << "Run stance foot drift (m): " << slide << '\n';
@@ -121,7 +125,7 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
     }
     Require(player->Clips()[player->playback.clip].name == "Run", "Run clip");
     Require(std::abs(std::hypot(dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[0], dynamic_cast<const PlayerController*>(demo.Find(1, "chromalis.player"))->Motion().position[2])-
-        (ScenePlaySettings{}.walkSpeed * walkFrames / 60 + ScenePlaySettings{}.runSpeed)) < 0.001f, "Run distance");
+        (ScenePlaySettings{}.walkSpeed * walkFrames / 60 + ScenePlaySettings{}.runSpeed * runFrames / 60)) < 0.001f, "Run distance");
     frame(input);
     Require(std::memcmp(walkPalette.data(), player->Palette().data(), walkPalette.size()*sizeof(XMFLOAT4X4)) != 0, "Animation palette never changed");
     input = {}; frame(input, "stopped.bmp");
@@ -140,6 +144,11 @@ void Run(Renderer& renderer, SceneRuntime& scene, const std::filesystem::path& r
     Require(rejected, "Invalid runtime pose accepted");
     Require(scene.Save(root/"Saved.cscene"), "Scene save failed");
     Require(LoadScene(root/"Saved.cscene").Entity(1).local == initial, "Runtime pose leaked into save");
+    player->CrossFade((player->playback.clip + 1) % static_cast<int>(player->Clips().size()), 0.5f);
+    scene.Update(0.1f);
+    const auto progress = player->TransitionProgress();
+    Require(!scene.ReloadAsset(scene.Document().Entity(1).asset, root/"missing.cskin"), "Invalid reload accepted during transition");
+    Require(scene.Animation(1) == player && player->Transitioning() && player->TransitionProgress() == progress, "Failed reload discarded active blend");
     Require(scene.ReloadAsset(scene.Document().Entity(1).asset), "Valid reload failed");
     scene.Update(0);
     Require(std::abs(scene.World(1)._43-stopped[2]) < 0.001f, "Reload reset runtime pose");

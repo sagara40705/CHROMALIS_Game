@@ -3,6 +3,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 using namespace chromalis;
@@ -10,6 +11,63 @@ using namespace DirectX;
 void Check(bool v,const char* why){if(!v)throw std::runtime_error(why);}
 template<class F> void Reject(F f){bool rejected=false;try{f();}catch(const std::exception&){rejected=true;}Check(rejected,"Invalid animation accepted");}
 bool Near(float a,float b){return std::abs(a-b)<0.005f;}
+void PlaybackTransitions(SkeletalAsset asset) {
+    // 移動値が分かる三つのClipで、両側の時計と割り込み時の連続性を確認する。
+    asset.clips.clear();
+    for (int i = 0; i < 3; ++i) {
+        const float offset = static_cast<float>(i) * 10;
+        asset.clips.push_back({"clip" + std::to_string(i), 1, {{0, 0, {{0, {offset,0,0,0}}, {1, {offset+2,0,0,0}}}}}});
+    }
+    AnimationPlayer player(asset), independent(asset);
+    XMFLOAT4X4 identity; XMStoreFloat4x4(&identity, XMMatrixIdentity());
+    const auto x = [&] { return player.Socket(0, identity).x; };
+    player.Play(0, 0.2f); player.CrossFade(1, 1, 0.1f);
+    Check(Near(x(), 0.4f) && player.Transitioning(), "Crossfade start jumped");
+    player.Update(0.25f);
+    Check(Near(x(), 3.35f) && Near(player.TransitionProgress(), 0.25f), "Crossfade did not advance both clips");
+    const auto before = player.Palette();
+    player.CrossFade(2, 0.4f);
+    for (size_t i = 0; i < before.size(); ++i) for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c)
+        Check(Near(before[i].m[r][c], player.Palette()[i].m[r][c]), "Interrupted blend discontinuity");
+    player.Update(0.2f); Check(Near(x(), 11.875f), "Interrupted blend target incorrect");
+    player.Pause(); player.Update(1); Check(Near(x(), 11.875f) && Near(player.TransitionProgress(), 0.5f), "Pause advanced transition");
+    player.Resume(); player.Update(0.2f); Check(!player.Transitioning() && Near(x(),20.8f), "Transition did not complete");
+    Check(independent.playback.clip == 0 && independent.playback.time == 0 && !independent.Transitioning(), "Transition state shared between instances");
+    player.CrossFade(0, 1); player.Seek(0.3f);
+    Check(!player.Transitioning() && Near(x(), 0.6f), "Seek did not cancel transition");
+    player.CrossFade(1, 1); player.Stop();
+    Check(!player.Transitioning() && !player.playback.playing && player.playback.time == 0 && Near(x(),10), "Stop did not reset target");
+    player.CrossFade(2, 0); Check(!player.Transitioning() && Near(x(),20), "Zero-duration switch failed");
+    const auto saved = x();
+    Reject([&] { player.CrossFade(-1, 0.2f); });
+    Reject([&] { player.CrossFade(0, -1); });
+    Reject([&] { player.CrossFade(0, std::numeric_limits<float>::quiet_NaN()); });
+    Reject([&] { player.Play(0, 2); });
+    Reject([&] { player.Seek(std::numeric_limits<float>::infinity()); });
+    Check(Near(x(), saved) && player.playback.clip == 2, "Invalid request changed playback");
+    player.playback.loop = false; player.playback.speed = -1; player.Play(0, 1); player.Update(1);
+    Check(!player.playback.playing && player.playback.time == 0, "Reverse terminal did not stop");
+    player.playback.loop = true; player.Play(0, 0.1f); player.Update(0.2f);
+    Check(Near(player.playback.time, 0.9f), "Reverse loop failed");
+    player.playback.speed = 0; player.Update(1); Check(Near(player.playback.time,0.9f), "Zero speed moved clip");
+    player.playback.loop = false; player.playback.speed = 1; player.CrossFade(1, 2, 0.9f); player.Update(0.2f);
+    Check(!player.playback.playing && !player.Transitioning() && Near(x(),12), "Nonloop end did not settle target");
+    player.playback.restPose = true; player.Evaluate(); const auto restX = x(); player.CrossFade(0, 1);
+    Check(Near(x(),restX), "Rest-pose blend jumped");
+    player.playback.bindPose = true; player.Evaluate(); player.CrossFade(1, 1);
+    Check(!player.playback.bindPose && !player.Transitioning(), "Bind preview did not exit safely");
+    player.playback.loop = true; player.playback.speed = std::numeric_limits<float>::max(); player.Update(std::numeric_limits<float>::max());
+    Check(std::isfinite(player.playback.time), "Large time advance overflowed");
+    XMFLOAT4X4 world; XMStoreFloat4x4(&world, XMMatrixScaling(2,3,4) * XMMatrixRotationY(0.7f) * XMMatrixTranslation(5,6,7));
+    const auto matrix = player.SocketTransform(1, world); const auto position = player.Socket(1, world);
+    Check(Near(matrix._41,position.x) && Near(matrix._42,position.y) && Near(matrix._43,position.z), "Socket matrix/position mismatch");
+    Check(std::abs(matrix._13) > 0.1f && Near(matrix._22,3), "Socket orientation/scale missing");
+    asset.clips[1].channels.push_back({0, 1, {{0, {0,0,0.70710678f,0.70710678f}}}});
+    asset.clips[1].channels.push_back({0, 2, {{0, {2,2,2,0}}}});
+    AnimationPlayer trs(asset); trs.CrossFade(1, 1); trs.Update(0.5f);
+    const auto mixed = trs.SocketTransform(0, identity);
+    Check(Near(mixed._11,1.5f*std::sqrt(0.5f)) && Near(mixed._12,1.5f*std::sqrt(0.5f)), "Quaternion/scale blend incorrect");
+}
 void SharedAnimation(const std::filesystem::path& source, const std::filesystem::path& output, const SkeletalAsset& model) {
     const auto path = output.parent_path() / "common.canim";
     auto library = CookAnimation(source, "characters/common");
@@ -92,6 +150,7 @@ int wmain(int argc,wchar_t** argv) {
         clip.channels.push_back({1,2,{{0,{1,1,1,0}},{1,{2,2,2,0}}}});
         test.clips={clip};
         test.clips.push_back(test.clips[0]);test.clips[1].name="second";
+        PlaybackTransitions(test);
         AnimationPlayer player(test);XMFLOAT4X4 world;XMStoreFloat4x4(&world,XMMatrixScaling(2,2,2)*XMMatrixTranslation(10,0,0));
         player.playback.restPose=true;player.Evaluate();auto socket=player.Socket(1,world);Check(Near(socket.x,12)&&Near(socket.y,4),"Rest/socket/world mismatch");
         player.playback.restPose=false;player.playback.time=0.5f;player.Evaluate();socket=player.Socket(1,world);Check(Near(socket.x,14)&&Near(socket.y,4),"Sampled hierarchy/socket mismatch");

@@ -69,11 +69,10 @@ void PlayerController::Update(BehaviourContext& context, float seconds) {
     auto& player = *scene.Animation(player_);
     const auto nextClip = clips_[static_cast<size_t>(motion_.state)];
     if (previous_ != motion_.state || command.reset) {
-        // 歩行と走行の周期だけを引き継ぐ。姿勢のクロスフェードは別の機能。
+        // 歩行と走行の周期を引き継ぎ、姿勢は共通のクロスフェードで接続する。
         const bool moving = previous_ != Locomotion::Idle && motion_.state != Locomotion::Idle && !command.reset;
         const float phase = moving ? player.playback.time / player.Clips()[player.playback.clip].duration : 0;
-        player.playback.clip = nextClip;
-        player.playback.time = phase * player.Clips()[nextClip].duration;
+        player.CrossFade(nextClip, command.reset ? 0.0f : settings_.at("transitionDuration").get<float>(), phase * player.Clips()[nextClip].duration);
         previous_ = motion_.state;
     }
     player.playback.speed = motion_.state == Locomotion::Idle ? 1 : std::clamp(motion_.speed /
@@ -98,6 +97,7 @@ BehaviourType PlayerController::Describe() {
         {"forwardYaw",p.forwardYaw}, {"groundHeight",0.0f},
         {"minX",-11.5f}, {"minZ",-11.5f}, {"maxX",11.5f}, {"maxZ",11.5f},
         {"idleClip","Idle"}, {"walkClip","Walk"}, {"runClip","Run"},
+        {"transitionDuration",0.18f,0,2},
         {"cameraTarget","0",0,0,BehaviourFieldKind::Entity}, {"cameraHeight",0.9f}, {"cameraFollow",10.0f,0.001,100}},
         [](const BehaviourSettings& settings) { return std::make_unique<PlayerController>(settings); }, true, true, 1, {}};
 }

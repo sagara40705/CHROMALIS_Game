@@ -49,10 +49,12 @@ struct BehaviourType {
     bool writesTransform = false, ownsCamera = false;
     uint32_t version = 1;
     std::string id;
+    // 登録一覧のファイル名。保存用IDやDescribeの名称とは分離する。
+    std::string sourceFilename;
 };
 class BehaviourRegistry {
 public:
-    void Add(BehaviourType type, std::string id);
+    void Add(BehaviourType type, std::string id, std::string sourceFilename = {});
     const BehaviourType* Find(const std::string& id) const;
     const std::vector<BehaviourType>& Types() const { return types_; }
 private:

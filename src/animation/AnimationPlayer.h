@@ -30,7 +30,14 @@ public:
     AnimationPlayer& operator=(const AnimationPlayer&)=delete;
     void Update(float seconds);
     void Evaluate();
+    void Play(int clip, float startTime = 0);
+    void CrossFade(int clip, float duration, float startTime = 0);
+    void Pause();
+    void Resume();
+    void Seek(float time);
     void Stop();
+    bool Transitioning() const;
+    float TransitionProgress() const;
     Playback playback;
     const SkeletalAsset& Asset() const;
     const std::vector<AnimationClip>& Clips() const;
@@ -38,6 +45,7 @@ public:
     const std::vector<DirectX::XMFLOAT4X4>& Palette() const;
     const std::vector<DirectX::XMFLOAT4X4>& Normals() const;
     DirectX::XMFLOAT3 Socket(size_t joint, const DirectX::XMFLOAT4X4& world) const;
+    DirectX::XMFLOAT4X4 SocketTransform(size_t joint, const DirectX::XMFLOAT4X4& world) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -6,9 +6,10 @@
 namespace chromalis {
 // CMakeが一覧から生成する。共通実行部は個別Behaviourのヘッダーを参照しない。
 void RegisterGameBehaviours(BehaviourRegistry& registry);
-void BehaviourRegistry::Add(BehaviourType type, std::string id) {
+void BehaviourRegistry::Add(BehaviourType type, std::string id, std::string sourceFilename) {
     if (id.empty() || Find(id) || !type.create || type.name.empty()) throw std::runtime_error("Invalid/duplicate Behaviour registration: " + id);
     type.id = std::move(id);
+    type.sourceFilename = std::move(sourceFilename);
     types_.push_back(std::move(type));
 }
 const BehaviourType* BehaviourRegistry::Find(const std::string& id) const {
