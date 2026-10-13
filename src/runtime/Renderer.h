@@ -76,6 +76,7 @@ public:
     double FenceWaitMs() const { return fenceWaitMs_; }
     double GpuFrameMs() const { return gpuFrameMs_; }
 private:
+    struct GpuModel;
     struct Frame {
         ComPtr<ID3D12CommandAllocator> allocator;
         ComPtr<ID3D12Resource> constants;
@@ -93,7 +94,10 @@ private:
     void CreatePipeline();
     void CreateMeshPipeline();
     void CreateDepth();
-    void DrawModels(const RenderSettings& settings, std::span<const DrawItem> items);
+    void DrawModels(const RenderSettings& settings, std::span<const DrawItem> items, bool shadowPass = false);
+    void CreateShadowTargets(UINT resolution);
+    void WriteShadowDescriptor(GpuModel& model);
+    void DrawShadow(const RenderSettings& settings, std::span<const DrawItem> items);
     void PrepareBoneUpload(std::span<const DrawItem> items);
     void PrepareMaterialUpload(std::span<const DrawItem> items);
     void WaitFor(UINT64 value);
@@ -153,5 +157,10 @@ private:
     ComPtr<ID3D12RootSignature> meshRoot_;
     std::array<ComPtr<ID3D12PipelineState>, 2> meshPso_;
     std::array<ComPtr<ID3D12PipelineState>, 2> skinPso_;
+    std::array<ComPtr<ID3D12PipelineState>, 2> shadowMeshPso_, shadowSkinPso_;
+    ComPtr<ID3D12Resource> shadowDepth_;
+    ComPtr<ID3D12DescriptorHeap> shadowDsv_;
+    UINT shadowResolution_ = 0;
+    DirectX::XMFLOAT4X4 lightViewProjection_{};
 };
 }

@@ -242,6 +242,7 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, 
     WaitFor(frame.fence);
     PrepareBoneUpload(items);
     ValidateLighting(settings.lighting);
+    if (settings.lighting.shadow.enabled) CreateShadowTargets(settings.lighting.shadow.resolution);
     PrepareMaterialUpload(items);
     if(frame.fence) {
         UINT64* times=nullptr;D3D12_RANGE range{0,16};Check(frame.timestamps->Map(0,&range,reinterpret_cast<void**>(&times)),"Read completed GPU timestamps");
@@ -251,6 +252,7 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, 
     CheckDevice(frame.allocator->Reset(), "Reset frame allocator after its fence");
     CheckDevice(list_->Reset(frame.allocator.Get(), pipeline_.Get()), "Reset command list");
     list_->EndQuery(timestampHeap_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,frameIndex_*2);
+    if (!triangle && settings.showModels && settings.lighting.shadow.enabled) DrawShadow(settings, items);
     const std::array<float, 4> constants{settings.x, settings.y, static_cast<float>(width_) / static_cast<float>(height_), settings.scale};
     std::memcpy(frame.mapped, constants.data(), sizeof(constants));
     lastClear_ = settings.clear;

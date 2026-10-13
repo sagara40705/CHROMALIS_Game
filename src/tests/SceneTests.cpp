@@ -73,10 +73,16 @@ void Persistence(const std::filesystem::path& root) {
     scene.materials.push_back({"shared/toon", surface});
     scene.Entity(model).materials.push_back({0, "shared/toon"});
     scene.view.lighting.color = {1, 0.5f, 0.25f};
+    scene.view.lighting.shadow.enabled = true; scene.view.lighting.shadow.resolution = 2048;
+    scene.view.lighting.shadow.tint = {0.2f, 0.3f, 0.4f};
+    scene.materials[0].surface.castShadow = false; scene.materials[0].surface.receiveShadow = false;
+    surface = scene.materials[0].surface;
     const auto path = root / L"シーン.cscene";
     SaveScene(scene, path);
     const auto bytes = Read(path);
     const auto loaded = LoadScene(path);
+    Require(loaded.view.lighting.shadow.enabled && loaded.view.lighting.shadow.resolution == 2048 &&
+        loaded.view.lighting.shadow.tint == scene.view.lighting.shadow.tint, "Shadow roundtrip failed");
     Require(loaded.materials[0].surface == surface && loaded.Entity(model).materials[0].material == "shared/toon" &&
         loaded.view.lighting.color == scene.view.lighting.color, "Material/light roundtrip failed");
     Require(loaded.Entity(effect).effect.follow == model && loaded.Entity(model).animation.time == 0.25f, "Roundtrip state");
@@ -92,6 +98,12 @@ void Persistence(const std::filesystem::path& root) {
     bad = scene; bad.materials[0].surface.emission[0] = std::numeric_limits<float>::quiet_NaN();
     Reject([&] { ValidateScene(bad); });
     bad = scene; bad.view.lighting.direction = {0, 0, 0};
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.view.lighting.shadow.resolution = 1000;
+    Reject([&] { SaveScene(bad, path); });
+    bad = scene; bad.view.lighting.shadow.extent = 0;
+    Reject([&] { ValidateScene(bad); });
+    bad = scene; bad.view.lighting.shadow.bias = std::numeric_limits<float>::quiet_NaN();
     Reject([&] { ValidateScene(bad); });
     bad = scene; bad.Entity(model).materials.push_back({0, "shared/toon"});
     Reject([&] { ValidateScene(bad); });
@@ -110,7 +122,7 @@ void Persistence(const std::filesystem::path& root) {
     std::filesystem::remove(alias);
     Reject([&] { SaveScene(scene, root / "texture.png"); });
     auto malformed = bytes;
-    const auto version = malformed.find("\"version\": 3");
+    const auto version = malformed.find("\"version\": 4");
     Require(version != std::string::npos, "Missing schema version");
     malformed.replace(version, 12, "\"version\": 9");
     { std::ofstream file(root / "bad.cscene"); file << malformed; }

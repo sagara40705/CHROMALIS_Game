@@ -1,0 +1,512 @@
+{
+  "assets": [
+    {
+      "id": "samples/scene-cube",
+      "kind": "static",
+      "path": "../../out/cooked/scene-samples/Cube.cmesh"
+    },
+    {
+      "id": "samples/scene-character",
+      "kind": "skeletal",
+      "path": "../../out/cooked/scene-samples/Figure.cskin"
+    },
+    {
+      "id": "scene/pulse",
+      "kind": "effect",
+      "path": "../Vfx/Pulse.efkefc"
+    },
+    {
+      "id": "samples/common-animation",
+      "kind": "animation",
+      "path": "../../out/cooked/scene-samples/Common.canim"
+    }
+  ],
+  "entities": [
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "asset": "",
+      "effect": {
+        "autoplay": true,
+        "count": 1,
+        "follow": "0",
+        "joint": ""
+      },
+      "id": "1",
+      "name": "Group",
+      "parent": "0",
+      "transform": {
+        "position": [
+          0.0,
+          -0.5,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "materials": []
+    },
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "asset": "samples/scene-cube",
+      "effect": {
+        "autoplay": true,
+        "count": 1,
+        "follow": "0",
+        "joint": ""
+      },
+      "id": "2",
+      "name": "Cube 0",
+      "parent": "1",
+      "transform": {
+        "position": [
+          -2.5,
+          -0.5,
+          1.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.4000000059604645,
+          0.4000000059604645,
+          0.4000000059604645
+        ]
+      },
+      "materials": [
+        {
+          "slot": 1,
+          "material": "sample/diffuse"
+        }
+      ]
+    },
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "asset": "samples/scene-cube",
+      "effect": {
+        "autoplay": true,
+        "count": 1,
+        "follow": "0",
+        "joint": ""
+      },
+      "id": "3",
+      "name": "Cube 1",
+      "parent": "1",
+      "transform": {
+        "position": [
+          0.0,
+          -0.5,
+          1.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.4000000059604645,
+          0.4000000059604645,
+          0.4000000059604645
+        ]
+      },
+      "materials": [
+        {
+          "slot": 1,
+          "material": "sample/unlit"
+        }
+      ]
+    },
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "asset": "samples/scene-cube",
+      "effect": {
+        "autoplay": true,
+        "count": 1,
+        "follow": "0",
+        "joint": ""
+      },
+      "id": "4",
+      "name": "Cube 2",
+      "parent": "1",
+      "transform": {
+        "position": [
+          2.5,
+          -0.5,
+          1.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.4000000059604645,
+          0.4000000059604645,
+          0.4000000059604645
+        ]
+      },
+      "materials": [
+        {
+          "slot": 1,
+          "material": "sample/toon"
+        }
+      ]
+    },
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.0,
+        "library": "samples/common-animation"
+      },
+      "asset": "samples/scene-character",
+      "effect": {
+        "autoplay": true,
+        "count": 1,
+        "follow": "0",
+        "joint": ""
+      },
+      "id": "5",
+      "name": "Shared rig 5",
+      "parent": "1",
+      "transform": {
+        "position": [
+          -1.2000000476837158,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "materials": [
+        {
+          "slot": 1,
+          "material": "sample/toon"
+        }
+      ]
+    },
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.5,
+        "library": "samples/common-animation"
+      },
+      "asset": "samples/scene-character",
+      "effect": {
+        "autoplay": true,
+        "count": 1,
+        "follow": "0",
+        "joint": ""
+      },
+      "id": "6",
+      "name": "Shared rig 6",
+      "parent": "1",
+      "transform": {
+        "position": [
+          1.2000000476837158,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "materials": [
+        {
+          "slot": 1,
+          "material": "sample/toon"
+        }
+      ]
+    },
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "asset": "scene/pulse",
+      "effect": {
+        "autoplay": true,
+        "count": 3,
+        "follow": "5",
+        "joint": "Z_UP"
+      },
+      "id": "7",
+      "name": "Socket effect",
+      "parent": "0",
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.20000000298023224,
+          0.20000000298023224,
+          0.20000000298023224
+        ]
+      },
+      "materials": []
+    },
+    {
+      "animation": {
+        "autoplay": true,
+        "bindPose": false,
+        "clip": "",
+        "loop": true,
+        "restPose": false,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "asset": "samples/scene-cube",
+      "effect": {
+        "autoplay": true,
+        "count": 1,
+        "follow": "0",
+        "joint": ""
+      },
+      "id": "8",
+      "name": "Shadow receiving floor",
+      "parent": "0",
+      "transform": {
+        "position": [
+          0,
+          -1.6,
+          0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          5,
+          0.05,
+          4
+        ]
+      },
+      "materials": [
+        {
+          "slot": 1,
+          "material": "sample/diffuse"
+        }
+      ]
+    }
+  ],
+  "nextId": "9",
+  "version": 4,
+  "view": {
+    "background": [
+      0.054999999701976776,
+      0.07000000029802322,
+      0.10999999940395355,
+      1.0
+    ],
+    "distance": 12,
+    "pitch": 0.55,
+    "unlit": false,
+    "yaw": 0.3499999940395355,
+    "lighting": {
+      "direction": [
+        -0.4,
+        0.8,
+        -0.6
+      ],
+      "color": [
+        0.8,
+        0.75,
+        0.7
+      ],
+      "ambient": [
+        0.12,
+        0.14,
+        0.18
+      ],
+      "shadow": {
+        "enabled": true,
+        "resolution": 1024,
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "tint": [
+          0.1,
+          0.14,
+          0.25
+        ],
+        "extent": 18,
+        "depth": 30,
+        "strength": 0.9,
+        "bias": 0.001,
+        "normalBias": 0.03,
+        "filterRadius": 1
+      }
+    }
+  },
+  "materials": [
+    {
+      "id": "sample/toon",
+      "shading": "toon",
+      "baseColor": [
+        0.55,
+        0.75,
+        1,
+        1
+      ],
+      "emission": [
+        0,
+        0,
+        0
+      ],
+      "shadow": [
+        0.25,
+        0.3,
+        0.4
+      ],
+      "threshold": 0.5,
+      "softness": 0.04,
+      "cutoff": 0.5,
+      "alphaMask": false,
+      "doubleSided": false,
+      "castShadow": true,
+      "receiveShadow": true
+    },
+    {
+      "id": "sample/unlit",
+      "shading": "unlit",
+      "baseColor": [
+        1,
+        0.55,
+        0.3,
+        1
+      ],
+      "emission": [
+        0,
+        0,
+        0
+      ],
+      "shadow": [
+        0.25,
+        0.3,
+        0.4
+      ],
+      "threshold": 0.5,
+      "softness": 0.04,
+      "cutoff": 0.5,
+      "alphaMask": false,
+      "doubleSided": false,
+      "castShadow": true,
+      "receiveShadow": true
+    },
+    {
+      "id": "sample/diffuse",
+      "shading": "lit",
+      "baseColor": [
+        0.8,
+        1,
+        0.7,
+        1
+      ],
+      "emission": [
+        0,
+        0,
+        0
+      ],
+      "shadow": [
+        0.25,
+        0.3,
+        0.4
+      ],
+      "threshold": 0.5,
+      "softness": 0.04,
+      "cutoff": 0.5,
+      "alphaMask": false,
+      "doubleSided": false,
+      "castShadow": true,
+      "receiveShadow": true
+    }
+  ]
+}

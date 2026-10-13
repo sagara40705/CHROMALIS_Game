@@ -33,7 +33,7 @@ Developmentルートから実行する。Game単独の場合は`Game/`の接頭�
 | SceneRuntime | 読み込み・編集時に参照/Slotを検証し、各モデル用の材質配列を解決。PlayerやMeshは変更しない |
 | Renderer | Mesh/Texture/PSOとフレーム別定数領域。Static/Skinningの後段は同じPixel Shader |
 
-`.cscene`はv3で保存し、v1/v2は材質割り当てなし・従来の照明値で読み込む。GameにImGuiはリンクしない。Edit/Playの材質はSceneコピーに従い分離する。モデルのAsset IDを変更する割り当て操作では、別モデルへの誤適用を避けてSlot割り当てを解除する。同じIDのreloadでは維持する。
+`.cscene`はv4で保存する。v1/v2は材質割り当てなし・従来の照明値で読み込み、v3は材質を維持して投影影を無効にする。GameにImGuiはリンクしない。Edit/Playの材質はSceneコピーに従い分離する。モデルのAsset IDを変更する割り当て操作では、別モデルへの誤適用を避けてSlot割り当てを解除する。同じIDのreloadでは維持する。
 
 Slotは現在インポート時の番号。DCCで材質順序を変えると、同じSlot数でも意味が変わる可能性がある。再生成時は外観を確認する。材質名による安定した再対応付けは未実装。共有定義はScene内に保存し、独立した材質ファイルやScene間ライブラリはまだ持たない。
 
@@ -41,14 +41,14 @@ Slotは現在インポート時の番号。DCCで材質順序を変えると、�
 
 Base Color TextureはsRGB SRVでデコードし、係数・照明・発光は線形空間で評価する。SceneのsRGB RTVが最後のSDR変換を担当する。ImGuiへは従来どおり符号化済みScene画像をUNORM SRVで渡す。既存VFXの線形合成経路は変更しない。
 
-- Litは`base * (ambient + lightColor * saturate(N dot L)) + emission`の拡散反射。
+- Litは`base * (ambient + lightColor * saturate(N dot L) * shadowLight) + emission`の拡散反射。投影影は直接光だけに掛ける。
 - Unlitは`base + emission`。
-- ToonはN dot Lの閾値をSoftness幅のsmoothstepで切り替え、Shadow色と白の間を補間して方向光へ掛ける。これは照明の段階化であり、投影された影ではない。
+- ToonはN dot Lの閾値をSoftness幅のsmoothstepで切り替え、Shadow色と白の間を補間して方向光へ掛ける。照明の段階化と、別途設定する[投影影](lighting-shadows.md)の色・濃さを組み合わせて調整できる。
 - OPAQUE/MASKは深度テスト・深度書き込みあり。両面では裏面法線を反転する。半透明メッシュのAlpha Blendとソートは未対応。
-- 描画順は不透明/MASK → VFX → ImGui。SDR 8-bitなので発光や加算結果は飽和する。
+- 描画順は影の深度 → 不透明/MASK → VFX → ImGui。SDR 8-bitなので発光や加算結果は飽和する。
 
-従来のRoot Constantsからフレーム別CBVへ移した。定数本体は320バイト、各Primitiveへ512バイトを割り当てる。対応フレームのFence完了後にだけ領域を拡張・書き換え、静的/骨格・複数個体/材質の定数が混ざらない。GPU参照中のBufferやDescriptorを編集しない。Scene編集は従来の同期ApplyでGPU idleを待つが、材質だけの変更ではMesh/Texture/Playerを再生成しない。
+従来のRoot Constantsからフレーム別CBVへ移した。定数本体は432バイト、各Primitiveへ512バイトを割り当てる。影パスと色パスは別の領域を使う。対応フレームのFence完了後にだけ領域を拡張・書き換え、静的/骨格・複数個体/材質の定数が混ざらない。GPU参照中のBufferやDescriptorを編集しない。Scene編集は従来の同期ApplyでGPU idleを待つが、材質だけの変更ではMesh/Texture/Playerを再生成しない。
 
 ## 今後の境界
 
-PBRのMetallic/Roughness、Normal Map、AO、影、IBL、HDR/Bloom、輪郭線、Rim、透過メッシュ、材質テクスチャ差し替え、Mip生成、独立材質アセットは未対応。元データにあるMetallic/Roughnessを描画しているとは扱わない。シェーダーはCMake/DXCによるビルド時コンパイルで、編集後は再ビルド・再起動する。汎用ノードEditorやRenderGraphは追加していない。
+PBRのMetallic/Roughness、Normal Map、AO、複数光源の影、IBL、HDR/Bloom、輪郭線、Rim、透過メッシュ、材質テクスチャ差し替え、Mip生成、独立材質アセットは未対応。元データにあるMetallic/Roughnessを描画しているとは扱わない。シェーダーはCMake/DXCによるビルド時コンパイルで、編集後は再ビルド・再起動する。汎用ノードEditorやRenderGraphは追加していない。

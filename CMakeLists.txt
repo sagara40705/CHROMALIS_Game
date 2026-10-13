@@ -61,6 +61,11 @@ add_custom_command(OUTPUT "${SHADER_DIR}/Skin_vs.h"
     -Fh "${SHADER_DIR}/Skin_vs.h" -Vn Skin_vs "${CMAKE_CURRENT_SOURCE_DIR}/shaders/Mesh.hlsl"
   DEPENDS shaders/Mesh.hlsl VERBATIM)
 target_sources(ChromalisRuntime PRIVATE "${SHADER_DIR}/Skin_vs.h")
+add_custom_command(OUTPUT "${SHADER_DIR}/Shadow_ps.h"
+  COMMAND "${DXC_EXECUTABLE}" -T ps_6_0 -E shadow_ps -WX -Ges -Zpr
+    -Fh "${SHADER_DIR}/Shadow_ps.h" -Vn Shadow_ps "${CMAKE_CURRENT_SOURCE_DIR}/shaders/Mesh.hlsl"
+  DEPENDS shaders/Mesh.hlsl VERBATIM)
+target_sources(ChromalisRuntime PRIVATE "${SHADER_DIR}/Shadow_ps.h")
 foreach(STAGE IN ITEMS vs ps)
   add_custom_command(OUTPUT "${SHADER_DIR}/Mesh_${STAGE}.h"
     COMMAND "${DXC_EXECUTABLE}" -T ${STAGE}_6_0 -E ${STAGE}_main -WX -Ges -Zpr
@@ -106,6 +111,11 @@ if(BUILD_TESTING)
   add_test(NAME scene.cpu COMMAND ChromalisSceneTests "${CMAKE_CURRENT_BINARY_DIR}/scene-tests/cpu")
   if(CHROMALIS_BUILD_COOKER)
     add_executable(ChromalisSceneRuntimeTests src/tests/SceneRuntimeTests.cpp)
+    add_executable(ChromalisShadowTests src/tests/ShadowTests.cpp)
+    target_link_libraries(ChromalisShadowTests PRIVATE ChromalisRuntime)
+    target_compile_options(ChromalisShadowTests PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
+    add_test(NAME shadow.warp COMMAND ChromalisShadowTests "${CMAKE_CURRENT_BINARY_DIR}/shadow-tests" warp)
+    set_tests_properties(shadow.warp PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
     target_link_libraries(ChromalisSceneRuntimeTests PRIVATE ChromalisRuntime)
     target_compile_options(ChromalisSceneRuntimeTests PRIVATE /W4 /WX /permissive- /utf-8 /EHsc)
     add_test(NAME scene.warp COMMAND ChromalisSceneRuntimeTests "${CMAKE_CURRENT_BINARY_DIR}/scene-tests/warp"

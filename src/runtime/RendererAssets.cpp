@@ -2,6 +2,7 @@
 #include "Mesh_vs.h"
 #include "Mesh_ps.h"
 #include "Skin_vs.h"
+#include "Shadow_ps.h"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -81,7 +82,8 @@ void Renderer::DisableSceneSurface() {
 void Renderer::CreateMeshPipeline() {
     D3D12_DESCRIPTOR_RANGE srv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0};
     D3D12_DESCRIPTOR_RANGE sampler{D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,1,0,0,0};
-    D3D12_ROOT_PARAMETER parameters[4]{};
+    D3D12_DESCRIPTOR_RANGE shadowSrv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,1,0,0};
+    D3D12_ROOT_PARAMETER parameters[5]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].Descriptor = {0,0}; parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     parameters[1].ParameterType = parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -89,7 +91,17 @@ void Renderer::CreateMeshPipeline() {
     parameters[1].ShaderVisibility = parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     parameters[3].ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[3].Descriptor={1,0};parameters[3].ShaderVisibility=D3D12_SHADER_VISIBILITY_VERTEX;
-    D3D12_ROOT_SIGNATURE_DESC root{}; root.NumParameters = 4; root.pParameters = parameters;
+    parameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    parameters[4].DescriptorTable = {1, &shadowSrv}; parameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC comparison{};
+    comparison.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    comparison.AddressU = comparison.AddressV = comparison.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    comparison.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    comparison.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    comparison.MaxLOD = D3D12_FLOAT32_MAX; comparison.MaxAnisotropy = 1;
+    comparison.ShaderRegister = 1; comparison.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_ROOT_SIGNATURE_DESC root{}; root.NumParameters = 5; root.pParameters = parameters;
+    root.NumStaticSamplers = 1; root.pStaticSamplers = &comparison;
     root.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     ComPtr<ID3DBlob> blob, errors;
     auto result = D3D12SerializeRootSignature(&root,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&errors);
@@ -123,6 +135,18 @@ void Renderer::CreateMeshPipeline() {
     }
     p.VS={Skin_vs,sizeof(Skin_vs)};p.InputLayout={input,5};
     for(size_t i=0;i<skinPso_.size();++i){p.RasterizerState.CullMode=i==0?D3D12_CULL_MODE_BACK:D3D12_CULL_MODE_NONE;Check(device_->CreateGraphicsPipelineState(&p,IID_PPV_ARGS(&skinPso_[i])),"Create skin pipeline");}
+    p.NumRenderTargets = 0; p.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    p.PS = {Shadow_ps, sizeof(Shadow_ps)};
+    for (size_t i = 0; i < 2; ++i) {
+        p.RasterizerState.CullMode = i == 0 ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
+        Check(device_->CreateGraphicsPipelineState(&p, IID_PPV_ARGS(&shadowSkinPso_[i])), "Create skinned shadow pipeline");
+    }
+    p.VS = {Mesh_vs, sizeof(Mesh_vs)}; p.InputLayout = {input, 3};
+    for (size_t i = 0; i < 2; ++i) {
+        p.RasterizerState.CullMode = i == 0 ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
+        Check(device_->CreateGraphicsPipelineState(&p, IID_PPV_ARGS(&shadowMeshPso_[i])), "Create static shadow pipeline");
+    }
+    CreateShadowTargets(1024);
 }
 MeshHandle Renderer::CreateMesh(const StaticAsset& asset, const std::vector<SkinVertex>* skin) {
     auto model = UploadModel(asset, skin);
@@ -175,7 +199,7 @@ std::unique_ptr<Renderer::GpuModel> Renderer::UploadModel(const StaticAsset& ass
             candidate->skinView={candidate->skin->GetGPUVirtualAddress(),static_cast<UINT>(skin->size()*sizeof(SkinVertex)),sizeof(SkinVertex)};
         }
         D3D12_DESCRIPTOR_HEAP_DESC heap{}; heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; heap.NumDescriptors = static_cast<UINT>(asset.textures.size());
+        heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; heap.NumDescriptors = static_cast<UINT>(asset.textures.size() + 1);
         Check(device_->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&candidate->srv)),"Create asset texture heap");
         auto cpu = candidate->srv->GetCPUDescriptorHandleForHeapStart();
         const auto srvStride = device_->GetDescriptorHandleIncrementSize(heap.Type);
@@ -202,6 +226,7 @@ std::unique_ptr<Renderer::GpuModel> Renderer::UploadModel(const StaticAsset& ass
             device_->CreateShaderResourceView(texture.Get(),&view,cpu); cpu.ptr += srvStride;
             candidate->textures.push_back(std::move(texture)); uploads.push_back(std::move(upload));
         }
+        WriteShadowDescriptor(*candidate);
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER; heap.NumDescriptors = static_cast<UINT>(asset.materials.size());
         Check(device_->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&candidate->samplers)),"Create asset sampler heap");
         cpu = candidate->samplers->GetCPUDescriptorHandleForHeapStart();
@@ -245,14 +270,14 @@ void Renderer::PrepareBoneUpload(std::span<const DrawItem> items) {
     frame.bonesMapped = mapped;
     frame.boneCapacity = required;
 }
-void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawItem> items) {
+void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawItem> items, bool shadowPass) {
     using namespace DirectX;
     list_->SetGraphicsRootSignature(meshRoot_.Get());
     const auto srvStride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     const auto samplerStride = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     UINT64 paletteOffset = 0;
-    UINT64 materialOffset = 0;
     auto& frame = frames_[frameIndex_];
+    UINT64 materialOffset = shadowPass ? frame.materialCapacity / 2 : 0;
     for (const auto& item : items) {
         const auto& model = *meshes_[item.mesh.slot].model;
         const bool skinned = !item.bones.empty();
@@ -260,17 +285,27 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
         struct Constants {
             XMFLOAT4X4 wvp, world, normalWorld;
             std::array<float, 4> color, options, emission, toon, shadow, lightDirection, lightColor, ambient;
+            XMFLOAT4X4 lightViewProjection;
+            std::array<float, 4> shadowOptions, castShadowTint, shadowExtra;
         } constants{};
-        static_assert(sizeof(Constants) == 320);
+        static_assert(sizeof(Constants) == 432);
         const auto vector4 = [](const std::array<float, 3>& v) { return std::array<float, 4>{v[0], v[1], v[2], 0}; };
         constants.lightDirection = vector4(settings.lighting.direction);
         constants.lightColor = vector4(settings.lighting.color);
         constants.ambient = vector4(settings.lighting.ambient);
-        XMStoreFloat4x4(&constants.wvp, world * XMLoadFloat4x4(&view_) * XMLoadFloat4x4(&projection_));
+        const auto projection = shadowPass ? XMLoadFloat4x4(&lightViewProjection_) : XMLoadFloat4x4(&view_) * XMLoadFloat4x4(&projection_);
+        XMStoreFloat4x4(&constants.wvp, world * projection);
+        constants.lightViewProjection = lightViewProjection_;
+        const auto& shadow = settings.lighting.shadow;
+        constants.castShadowTint = vector4(shadow.tint);
+        constants.shadowExtra = {shadow.normalBias, 0, 0, 0};
         constants.world = item.world;
         XMStoreFloat4x4(&constants.normalWorld, XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
         ID3D12DescriptorHeap* heaps[]{model.srv.Get(), model.samplers.Get()};
         list_->SetDescriptorHeaps(2, heaps);
+        auto shadowView = model.srv->GetGPUDescriptorHandleForHeapStart();
+        shadowView.ptr += model.textures.size() * srvStride;
+        list_->SetGraphicsRootDescriptorTable(4, shadowView);
         list_->IASetVertexBuffers(0, 1, &model.vb);
         list_->IASetIndexBuffer(&model.ib);
         if (skinned) {
@@ -283,13 +318,18 @@ void Renderer::DrawModels(const RenderSettings& settings, std::span<const DrawIt
         for (const auto& part : model.parts) {
             const auto& material = model.materials[part.material];
             const auto surface = item.materials.empty() ? ImportedSurface(material) : item.materials[part.material];
+            if (shadowPass && !surface.castShadow) continue;
+            constants.shadowOptions = {shadow.enabled && surface.receiveShadow ? shadow.strength : 0, shadow.bias,
+                1.0f / static_cast<float>(shadowResolution_), shadow.filterRadius};
             constants.color = surface.baseColor;
             constants.options = {surface.cutoff, surface.alphaMask ? 1.0f : 0.0f,
                 settings.unlit ? 1.0f : static_cast<float>(surface.shading), 0};
             constants.emission = vector4(surface.emission);
             constants.toon = {surface.threshold, surface.softness, 0, 0};
             constants.shadow = vector4(surface.shadow);
-            list_->SetPipelineState(skinned ? skinPso_[surface.doubleSided].Get() : meshPso_[surface.doubleSided].Get());
+            auto* pipeline = shadowPass ? (skinned ? shadowSkinPso_[surface.doubleSided].Get() : shadowMeshPso_[surface.doubleSided].Get()) :
+                (skinned ? skinPso_[surface.doubleSided].Get() : meshPso_[surface.doubleSided].Get());
+            list_->SetPipelineState(pipeline);
             std::memcpy(frame.materialsMapped + materialOffset, &constants, sizeof(constants));
             list_->SetGraphicsRootConstantBufferView(0, frame.materialConstants->GetGPUVirtualAddress() + materialOffset);
             materialOffset += 512;
@@ -314,7 +354,7 @@ void Renderer::PrepareMaterialUpload(std::span<const DrawItem> items) {
         const auto& model = *meshes_[item.mesh.slot].model;
         if (!item.materials.empty() && item.materials.size() != model.materials.size())
             throw std::runtime_error("Draw material count does not match mesh");
-        required += model.parts.size() * 512;
+        required += model.parts.size() * 1024;
     }
     auto& frame = frames_[frameIndex_];
     if (required <= frame.materialCapacity) return;
@@ -336,5 +376,56 @@ size_t Renderer::MaterialUseCount(MeshHandle mesh, uint32_t slot) const {
     (void)MeshMaterials(mesh);
     const auto& parts = meshes_[mesh.slot].model->parts;
     return static_cast<size_t>(std::count_if(parts.begin(), parts.end(), [&](const auto& part) { return part.material == slot; }));
+}
+void Renderer::WriteShadowDescriptor(GpuModel& model) {
+    auto handle = model.srv->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += model.textures.size() * device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+    view.Format = DXGI_FORMAT_R32_FLOAT; view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;
+    device_->CreateShaderResourceView(shadowDepth_.Get(), &view, handle);
+}
+void Renderer::CreateShadowTargets(UINT resolution) {
+    if (shadowDepth_ && shadowResolution_ == resolution) return;
+    // 解像度変更は候補を作ってからGPUを待ち、全モデルの予約SRVを更新する。
+    ComPtr<ID3D12Resource> candidate;
+    ComPtr<ID3D12DescriptorHeap> descriptors;
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{}; heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV; heapDesc.NumDescriptors = 1;
+    Check(device_->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptors)), "Create shadow DSV heap");
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; desc.Width = desc.Height = resolution;
+    desc.DepthOrArraySize = desc.MipLevels = 1; desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_R32_TYPELESS; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+    D3D12_CLEAR_VALUE clear{}; clear.Format = DXGI_FORMAT_D32_FLOAT; clear.DepthStencil.Depth = 1;
+    const auto heap = HeapType(D3D12_HEAP_TYPE_DEFAULT);
+    Check(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &clear, IID_PPV_ARGS(&candidate)), "Create directional shadow depth");
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{}; dsv.Format = DXGI_FORMAT_D32_FLOAT; dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    device_->CreateDepthStencilView(candidate.Get(), &dsv, descriptors->GetCPUDescriptorHandleForHeapStart());
+    if (shadowDepth_) WaitIdle();
+    shadowDepth_ = std::move(candidate); shadowDsv_ = std::move(descriptors); shadowResolution_ = resolution;
+    for (auto& entry : meshes_) if (entry.model) WriteShadowDescriptor(*entry.model);
+}
+void Renderer::DrawShadow(const RenderSettings& settings, std::span<const DrawItem> items) {
+    using namespace DirectX;
+    const auto& shadow = settings.lighting.shadow;
+    const auto& light = settings.lighting.direction;
+    const auto direction = XMVector3Normalize(XMVectorSet(light[0], light[1], light[2], 0));
+    const auto center = XMVectorSet(shadow.center[0], shadow.center[1], shadow.center[2], 1);
+    // 鉛直の光でもLookAtの基底が退化しない上方向を選ぶ。
+    const auto up = std::abs(XMVectorGetY(direction)) > 0.99f ? XMVectorSet(0, 0, 1, 0) : XMVectorSet(0, 1, 0, 0);
+    const auto view = XMMatrixLookAtLH(center + direction * (shadow.depth * 0.5f), center, up);
+    XMStoreFloat4x4(&lightViewProjection_, view * XMMatrixOrthographicLH(shadow.extent, shadow.extent, 0.01f, shadow.depth));
+    Barrier(list_.Get(), shadowDepth_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    const auto dsv = shadowDsv_->GetCPUDescriptorHandleForHeapStart();
+    list_->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
+    list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
+    const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(shadowResolution_), static_cast<float>(shadowResolution_), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(shadowResolution_), static_cast<LONG>(shadowResolution_)};
+    list_->RSSetViewports(1, &viewport); list_->RSSetScissorRects(1, &rect);
+    list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    DrawModels(settings, items, true);
+    // 同一Graphics Queue上で深度書き込みを完了し、本描画へ渡す。
+    Barrier(list_.Get(), shadowDepth_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 }

@@ -46,16 +46,21 @@ bool SamePath(const std::filesystem::path& a, const std::filesystem::path& b) {
     return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 Json Encode(const SceneDocument& document, const std::filesystem::path& destination) {
-    Json root{{"version", 3}, {"nextId", std::to_string(document.nextId)}};
+    Json root{{"version", 4}, {"nextId", std::to_string(document.nextId)}};
     const auto& view = document.view;
     root["view"] = {{"background", view.background}, {"yaw", view.yaw}, {"pitch", view.pitch}, {"distance", view.distance}, {"unlit", view.unlit}};
     root["view"]["lighting"] = {{"direction", view.lighting.direction}, {"color", view.lighting.color}, {"ambient", view.lighting.ambient}};
+    const auto& shadow = view.lighting.shadow;
+    root["view"]["lighting"]["shadow"] = {{"enabled", shadow.enabled}, {"resolution", shadow.resolution},
+        {"center", shadow.center}, {"tint", shadow.tint}, {"extent", shadow.extent}, {"depth", shadow.depth},
+        {"strength", shadow.strength}, {"bias", shadow.bias}, {"normalBias", shadow.normalBias}, {"filterRadius", shadow.filterRadius}};
     root["materials"] = Json::array();
     for (const auto& material : document.materials) {
         const auto& m = material.surface;
         root["materials"].push_back({{"id", material.id}, {"baseColor", m.baseColor}, {"emission", m.emission}, {"shadow", m.shadow},
             {"shading", m.shading == ShadingModel::Lit ? "lit" : m.shading == ShadingModel::Unlit ? "unlit" : "toon"},
-            {"cutoff", m.cutoff}, {"threshold", m.threshold}, {"softness", m.softness}, {"alphaMask", m.alphaMask}, {"doubleSided", m.doubleSided}});
+            {"cutoff", m.cutoff}, {"threshold", m.threshold}, {"softness", m.softness}, {"alphaMask", m.alphaMask}, {"doubleSided", m.doubleSided},
+            {"castShadow", m.castShadow}, {"receiveShadow", m.receiveShadow}});
     }
     root["assets"] = Json::array();
     const auto base = std::filesystem::absolute(destination).parent_path();
@@ -88,7 +93,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         std::ifstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open scene");
         const auto root = Json::parse(stream);
-        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3) throw std::runtime_error("Unsupported scene version");
+        if (root.at("version") != 1 && root.at("version") != 2 && root.at("version") != 3 && root.at("version") != 4) throw std::runtime_error("Unsupported scene version");
         SceneDocument document;
         document.nextId = Id(root.at("nextId"));
         const auto& view = root.at("view");
@@ -97,10 +102,20 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
         document.view.pitch = view.at("pitch").get<float>();
         document.view.distance = view.at("distance").get<float>();
         document.view.unlit = view.at("unlit").get<bool>();
-        if (root.at("version") == 3) {
+        if (root.at("version") == 3 || root.at("version") == 4) {
             const auto& lighting = view.at("lighting");
             document.view.lighting = {lighting.at("direction").get<std::array<float, 3>>(),
                 lighting.at("color").get<std::array<float, 3>>(), lighting.at("ambient").get<std::array<float, 3>>()};
+            if (root.at("version") == 4) {
+                const auto& s = lighting.at("shadow");
+                auto& shadow = document.view.lighting.shadow;
+                shadow.enabled = s.at("enabled");
+                if (!s.at("resolution").is_number_unsigned() || s.at("resolution").get<uint64_t>() > 4096) throw std::runtime_error("Invalid shadow resolution");
+                shadow.resolution = s.at("resolution");
+                shadow.center = s.at("center").get<std::array<float, 3>>(); shadow.tint = s.at("tint").get<std::array<float, 3>>();
+                shadow.extent = s.at("extent"); shadow.depth = s.at("depth"); shadow.strength = s.at("strength");
+                shadow.bias = s.at("bias"); shadow.normalBias = s.at("normalBias"); shadow.filterRadius = s.at("filterRadius");
+            }
             const auto& materials = root.at("materials");
             if (!materials.is_array() || materials.size() > 4096) throw std::runtime_error("Invalid material collection");
             for (const auto& value : materials) {
@@ -115,6 +130,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
                 m.shading = shading == "lit" ? ShadingModel::Lit : shading == "unlit" ? ShadingModel::Unlit : ShadingModel::Toon;
                 m.cutoff = value.at("cutoff"); m.threshold = value.at("threshold"); m.softness = value.at("softness");
                 m.alphaMask = value.at("alphaMask"); m.doubleSided = value.at("doubleSided");
+                if (root.at("version") == 4) { m.castShadow = value.at("castShadow"); m.receiveShadow = value.at("receiveShadow"); }
                 document.materials.push_back(std::move(material));
             }
         }
@@ -140,7 +156,7 @@ SceneDocument LoadScene(const std::filesystem::path& path) {
                 a.at("loop").get<bool>(), a.at("autoplay").get<bool>(), a.at("restPose").get<bool>(), a.at("bindPose").get<bool>(), a.value("library", std::string{})};
             const auto& e = value.at("effect");
             entity.effect = {e.at("count").get<int>(), e.at("autoplay").get<bool>(), Id(e.at("follow")), e.at("joint").get<std::string>()};
-            if (root.at("version") == 3) {
+            if (root.at("version") == 3 || root.at("version") == 4) {
                 const auto& bindings = value.at("materials");
                 if (!bindings.is_array() || bindings.size() > 4096) throw std::runtime_error("Invalid material bindings");
                 for (const auto& binding : bindings) {

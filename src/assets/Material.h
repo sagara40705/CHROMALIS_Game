@@ -12,12 +12,20 @@ struct MaterialSurface {
     ShadingModel shading = ShadingModel::Lit;
     float cutoff = 0.5f, threshold = 0.5f, softness = 0.05f;
     bool alphaMask = false, doubleSided = false;
+    bool castShadow = true, receiveShadow = true;
     bool operator==(const MaterialSurface&) const = default;
+};
+struct DirectionalShadow {
+    bool enabled = false;
+    uint32_t resolution = 1024;
+    std::array<float, 3> center{0, 0, 0}, tint{0, 0, 0};
+    float extent = 20, depth = 40, strength = 1, bias = 0.001f, normalBias = 0.02f, filterRadius = 1;
 };
 struct SceneLighting {
     // サーフェスから光源へ向かうWorld方向。色と強度は線形値。
     std::array<float, 3> direction{-0.4f, 0.8f, -0.6f};
     std::array<float, 3> color{0.7f, 0.7f, 0.7f}, ambient{0.3f, 0.3f, 0.3f};
+    DirectionalShadow shadow;
 };
 inline MaterialSurface ImportedSurface(const MeshMaterial& source) {
     MaterialSurface result;
@@ -48,5 +56,14 @@ inline void ValidateLighting(const SceneLighting& value) {
         length += double(axis) * axis;
     }
     if (length < 1e-12) throw std::runtime_error("Light direction cannot be zero");
+    const auto& shadow = value.shadow;
+    ValidateColor(shadow.tint, 1);
+    for (float axis : shadow.center) if (!std::isfinite(axis) || std::abs(axis) > 100000) throw std::runtime_error("Invalid shadow center");
+    if (shadow.resolution != 256 && shadow.resolution != 512 && shadow.resolution != 1024 && shadow.resolution != 2048 && shadow.resolution != 4096)
+        throw std::runtime_error("Unsupported shadow resolution");
+    const auto range = [](float number, float minimum, float maximum) { return std::isfinite(number) && number >= minimum && number <= maximum; };
+    if (!range(shadow.extent, 0.1f, 10000) || !range(shadow.depth, 0.1f, 10000) || !range(shadow.strength, 0, 1) ||
+        !range(shadow.bias, 0, 0.05f) || !range(shadow.normalBias, 0, 1) || !range(shadow.filterRadius, 0, 4))
+        throw std::runtime_error("Invalid directional shadow settings");
 }
 }
