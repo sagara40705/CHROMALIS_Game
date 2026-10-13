@@ -1,0 +1,273 @@
+{
+  "source": [
+    {
+      "name": "EXP_Crystal_Blue",
+      "triangles": 32,
+      "vertices": 18,
+      "materials": 1,
+      "dimensions_m": [
+        0.07339263707399368,
+        0.06311766803264618,
+        0.18000000715255737
+      ],
+      "non_manifold_edges": 0,
+      "inward_faces": 0,
+      "signed_volume": 0.00026437097288919585,
+      "flat": true
+    },
+    {
+      "name": "EXP_Crystal_Purple",
+      "triangles": 64,
+      "vertices": 34,
+      "materials": 1,
+      "dimensions_m": [
+        0.06109026446938515,
+        0.05009401589632034,
+        0.20999999344348907
+      ],
+      "non_manifold_edges": 0,
+      "inward_faces": 0,
+      "signed_volume": 0.00022776740939449845,
+      "flat": true
+    },
+    {
+      "name": "EXP_Crystal_Gold",
+      "triangles": 96,
+      "vertices": 50,
+      "materials": 1,
+      "dimensions_m": [
+        0.09459482133388519,
+        0.08835779875516891,
+        0.23999999463558197
+      ],
+      "non_manifold_edges": 0,
+      "inward_faces": 0,
+      "signed_volume": 0.0006082994086135178,
+      "flat": true
+    }
+  ],
+  "glb": [
+    {
+      "name": "EXP_Crystal_Blue",
+      "bytes": 3640,
+      "meshes": 1,
+      "materials": 1,
+      "primitives": 1,
+      "triangles": 32,
+      "exported_vertices": 96,
+      "imported_vertices": 96,
+      "welded_vertices": 18,
+      "position_triangles_match": true,
+      "base_color_max_error": 0.0,
+      "dimensions_match": true,
+      "origin_centered": true,
+      "non_manifold_after_weld": 0,
+      "inward_faces": 0,
+      "alpha_mode": "OPAQUE",
+      "material": {
+        "name": "EXP_Crystal_Blue_PBR",
+        "pbrMetallicRoughness": {
+          "baseColorFactor": [
+            0.017999999225139618,
+            0.28999999165534973,
+            0.800000011920929,
+            1
+          ],
+          "metallicFactor": 0.07999999821186066,
+          "roughnessFactor": 0.3100000023841858
+        }
+      }
+    },
+    {
+      "name": "EXP_Crystal_Purple",
+      "bytes": 6136,
+      "meshes": 1,
+      "materials": 1,
+      "primitives": 1,
+      "triangles": 64,
+      "exported_vertices": 192,
+      "imported_vertices": 192,
+      "welded_vertices": 34,
+      "position_triangles_match": true,
+      "base_color_max_error": 0.0,
+      "dimensions_match": true,
+      "origin_centered": true,
+      "non_manifold_after_weld": 0,
+      "inward_faces": 0,
+      "alpha_mode": "OPAQUE",
+      "material": {
+        "name": "EXP_Crystal_Purple_PBR",
+        "pbrMetallicRoughness": {
+          "baseColorFactor": [
+            0.36000001430511475,
+            0.054999999701976776,
+            0.75,
+            1
+          ],
+          "metallicFactor": 0.07999999821186066,
+          "roughnessFactor": 0.28999999165534973
+        }
+      }
+    },
+    {
+      "name": "EXP_Crystal_Gold",
+      "bytes": 8640,
+      "meshes": 1,
+      "materials": 1,
+      "primitives": 1,
+      "triangles": 96,
+      "exported_vertices": 288,
+      "imported_vertices": 288,
+      "welded_vertices": 50,
+      "position_triangles_match": true,
+      "base_color_max_error": 0.0,
+      "dimensions_match": true,
+      "origin_centered": true,
+      "non_manifold_after_weld": 0,
+      "inward_faces": 0,
+      "alpha_mode": "OPAQUE",
+      "material": {
+        "name": "EXP_Crystal_Gold_PBR",
+        "pbrMetallicRoughness": {
+          "baseColorFactor": [
+            0.9200000166893005,
+            0.47999998927116394,
+            0.03500000014901161,
+            1
+          ],
+          "metallicFactor": 0.07999999821186066,
+          "roughnessFactor": 0.27000001072883606
+        }
+      }
+    }
+  ],
+  "preserved_original_scene": [
+    [
+      "Cube",
+      "MESH"
+    ],
+    [
+      "Light",
+      "LIGHT"
+    ],
+    [
+      "Camera",
+      "CAMERA"
+    ]
+  ],
+  "render_roundtrip": {
+    "size": [
+      1400,
+      850
+    ],
+    "mean_absolute_error_rgba_8bit": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "max_difference_rgba_8bit": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "small_size": [
+    {
+      "name": "Blue",
+      "object_height_px": 32,
+      "width_px": 17
+    },
+    {
+      "name": "Blue",
+      "object_height_px": 64,
+      "width_px": 33
+    },
+    {
+      "name": "Purple",
+      "object_height_px": 32,
+      "width_px": 12
+    },
+    {
+      "name": "Purple",
+      "object_height_px": 64,
+      "width_px": 25
+    },
+    {
+      "name": "Gold",
+      "object_height_px": 32,
+      "width_px": 17
+    },
+    {
+      "name": "Gold",
+      "object_height_px": 64,
+      "width_px": 35
+    }
+  ],
+  "files": {
+    "EXP_Crystals.blend": {
+      "bytes": 274122,
+      "sha256": "b5b46df7834681444f67746026a1422d46cb357c1142615ff3aac4fb53f9389b"
+    },
+    "EXP_Crystals_Hero.png": {
+      "bytes": 546390,
+      "sha256": "d167eb0f5239f74e3dc9925792429c8425cbf8e1fda23879e336032560dd538f"
+    },
+    "EXP_Crystals_Preview.png": {
+      "bytes": 348995,
+      "sha256": "3fe9844da1cad6adbdac69806b14773ce47dd44f17d154a7aa0500503802bf55"
+    },
+    "EXP_Crystals_Roundtrip.png": {
+      "bytes": 546390,
+      "sha256": "5ca5b1080355b716cabcb1605176cc014eaa8953c55576acc0c7b9a6b137f037"
+    },
+    "EXP_Crystal_Blue.glb": {
+      "bytes": 3640,
+      "sha256": "85662590e6e0b4141866836136defeaa99b4d3a79d213a6c065f954622f0a59f"
+    },
+    "EXP_Crystal_Gold.glb": {
+      "bytes": 8640,
+      "sha256": "8fccb897a861bc85dc573aaf423af5aed4c98ef25e0af2e07b7b48eaa8ae327c"
+    },
+    "EXP_Crystal_Purple.glb": {
+      "bytes": 6136,
+      "sha256": "76c3d40036c3967ca88c1c037b7dde53005b6174691290fba71dc3d3c3f314b9"
+    }
+  },
+  "blend_reload": {
+    "passed": true,
+    "mesh_count": 3,
+    "triangles": [
+      32,
+      64,
+      96
+    ]
+  },
+  "source_extra_checks": [
+    {
+      "name": "EXP_Crystal_Blue",
+      "duplicate_faces": 0,
+      "degenerate_faces": 0,
+      "all_triangles": true,
+      "modifiers": 0,
+      "animation": false
+    },
+    {
+      "name": "EXP_Crystal_Purple",
+      "duplicate_faces": 0,
+      "degenerate_faces": 0,
+      "all_triangles": true,
+      "modifiers": 0,
+      "animation": false
+    },
+    {
+      "name": "EXP_Crystal_Gold",
+      "duplicate_faces": 0,
+      "degenerate_faces": 0,
+      "all_triangles": true,
+      "modifiers": 0,
+      "animation": false
+    }
+  ]
+}

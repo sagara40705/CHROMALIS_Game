@@ -3,6 +3,7 @@
 #include "Mesh_ps.h"
 #include "Skin_vs.h"
 #include <cstring>
+#include <cmath>
 #include <format>
 #include <stdexcept>
 
@@ -33,6 +34,48 @@ void Renderer::CreateDepth() {
     Check(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE,
         &clear, IID_PPV_ARGS(&depth_)), "Create depth buffer");
     device_->CreateDepthStencilView(depth_.Get(), nullptr, dsv_->GetCPUDescriptorHandleForHeapStart());
+}
+void Renderer::SetSceneSurface(UINT width, UINT height, D3D12_CPU_DESCRIPTOR_HANDLE srv, const std::array<float, 4>& background) {
+    if (!width || !height || width > 8192 || height > 8192 || !srv.ptr) throw std::runtime_error("Invalid Scene View extent/descriptor");
+    if (sceneColor_ && sceneWidth_ == width && sceneHeight_ == height && sceneClear_ == background && sceneSrv_.ptr == srv.ptr) return;
+    WaitIdle();
+    // 候補が完成するまで旧Surfaceを保持し、SRV更新前に全フレームを待つ。
+    ComPtr<ID3D12Resource> color, depth;
+    ComPtr<ID3D12DescriptorHeap> rtv, dsv;
+    D3D12_DESCRIPTOR_HEAP_DESC descriptors{}; descriptors.NumDescriptors = 1;
+    descriptors.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    Check(device_->CreateDescriptorHeap(&descriptors, IID_PPV_ARGS(&rtv)), "Create Scene View RTV");
+    descriptors.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    Check(device_->CreateDescriptorHeap(&descriptors, IID_PPV_ARGS(&dsv)), "Create Scene View DSV");
+    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width; desc.Height = height; desc.DepthOrArraySize = desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1; desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    const auto heap = HeapType(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_CLEAR_VALUE colorClear{}; colorClear.Format = SceneFormat;
+    for (size_t i = 0; i < 3; ++i) colorClear.Color[i] = background[i] <= 0.04045f ? background[i] / 12.92f : std::pow((background[i] + 0.055f) / 1.055f, 2.4f);
+    colorClear.Color[3] = background[3];
+    Check(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &colorClear, IID_PPV_ARGS(&color)), "Create Scene View color");
+    desc.Format = DXGI_FORMAT_D32_FLOAT; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+    D3D12_CLEAR_VALUE clear{}; clear.Format = desc.Format; clear.DepthStencil.Depth = 1;
+    Check(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &clear, IID_PPV_ARGS(&depth)), "Create Scene View depth");
+    D3D12_RENDER_TARGET_VIEW_DESC target{}; target.Format = SceneFormat; target.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    device_->CreateRenderTargetView(color.Get(), &target, rtv->GetCPUDescriptorHandleForHeapStart());
+    device_->CreateDepthStencilView(depth.Get(), nullptr, dsv->GetCPUDescriptorHandleForHeapStart());
+    D3D12_SHADER_RESOURCE_VIEW_DESC view{}; view.Format = OutputFormat; view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;
+    // Scene RTVで符号化済みの表示色をImGuiへ渡し、二重変換を避ける。
+    device_->CreateShaderResourceView(color.Get(), &view, srv);
+    sceneColor_ = std::move(color); sceneDepth_ = std::move(depth);
+    sceneRtv_ = std::move(rtv); sceneDsv_ = std::move(dsv);
+    sceneWidth_ = width; sceneHeight_ = height;
+    sceneClear_ = background; sceneSrv_ = srv;
+}
+void Renderer::DisableSceneSurface() {
+    if (!sceneColor_) return;
+    WaitIdle(); sceneColor_.Reset(); sceneDepth_.Reset(); sceneRtv_.Reset(); sceneDsv_.Reset();
+    sceneWidth_ = sceneHeight_ = 0;
 }
 void Renderer::CreateMeshPipeline() {
     D3D12_DESCRIPTOR_RANGE srv{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0};

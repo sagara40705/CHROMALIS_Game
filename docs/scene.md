@@ -2,14 +2,14 @@
 
 ## 所有権と依存
 
-ApplicationがRendererとSceneRuntimeを所有する。SceneRuntimeはRendererの後に生成し、GPU待機後に先に破棄する。Editorは両者を借用し、ImGuiはGameへリンクしない。
+ApplicationがRendererとSceneRuntimeを所有する。SceneRuntimeはRendererの後に生成し、GPU待機後に先に破棄する。Editorは両者を借用し、Play中の実行用SceneRuntimeだけを追加所有する。ImGui/ImGuizmoはGameへリンクしない。
 
 | 所有者 | 所有する状態 |
 |---|---|
 | SceneDocument | 安定したEntity ID、名前、親、Local Transform、Asset ID、保存対象の再生初期設定、カメラ |
 | SceneRuntime | Document、評価済みWorld、共有ロード済みアセット、個体ごとのAnimationPlayer・VfxPlayer、フレーム用描画リスト |
-| Renderer | Device/Queue/Fence、共有MeshHandleに対応するGPU VB/IB/Texture/Descriptor、フレーム別Upload、Swap Chain/Depth |
-| EditorOverlay | 選択ID、入力欄、ImGui状態。Sceneの正本やGPUメッシュは所有しない |
+| Renderer | Device/Queue/Fence、共有MeshHandleに対応するGPU VB/IB/Texture/Descriptor、フレーム別Upload、Swap Chain/Depth、要求時のScene Color/Depth |
+| EditorOverlay / EditorSession | 選択ID、編集カメラ、入力欄、ImGui/SRV、Play用Sceneコピー。編集用Sceneの正本は借用する |
 
 SceneDocument/SceneIOはD3D12とImGuiに依存しない。SceneRuntimeがCPUデータを読みRendererにGPU生成を依頼する。MeshHandleはslot+generationであり、永続Asset IDとは別物。同じAsset IDの静的/骨格メッシュは共有し、骨格の再生時刻・姿勢は個体ごとに持つ。VFXは既存のEffekseer接続を維持し、オブジェクトごとにVfxPlayerを持つため、大量配置向けの共有Manager設計ではない。
 
@@ -59,6 +59,12 @@ EditorはScene pathのNew/Open/Save/Save As/Reload、Hierarchyの追加・親変
 
 ## 制限
 
-Undo/Redo、Prefab、Gizmo、ビューポート分離、非同期Streaming、汎用ECS、Play用Scene複製は未実装。Scene APIはメインスレッドのフレーム境界で使い、DrawItemの参照を次の編集/更新まで保持しない。Socketは位置追従だけ。VFX同時数の間隔は従来の検証用World Xオフセットを維持する。日本語コメントを使用するがImGuiの日本語フォントは未導入。Scene JSONの日本語名・パスは保持できるがUI上の日本語名表示は未対応。
+Undo/Redo、Prefab、非同期Streaming、汎用ECSは未実装。Scene APIはメインスレッドのフレーム境界で使い、DrawItemの参照を次の編集/更新まで保持しない。Socketは位置追従だけ。VFX同時数の間隔は従来の検証用World Xオフセットを維持する。日本語コメントを使用するがImGuiの日本語フォントは未導入。Scene JSONの日本語名・パスは保持できるがUI上の日本語名表示は未対応。
+
+Editorは専用Scene Viewとギズモ、CPU三角形選択を提供する。Pickは読み込み済みの静的位置/Index、骨格の現在Paletteを使う。クリック時のみ姿勢を計算し、GPU readbackは不要。負Scale・Local TRSに戻せないShearを伴うギズモ変更は拒否する。Alpha抜きや裏面カリングは選択判定に含まない。
+
+EditとPlayは別のSceneRuntimeを使う。Playは保存対象の初期設定から始め、Stopは実行コピーを破棄する。編集用の未保存状態や一時プレビュー時刻は変更しない。Sceneファイルの保存・読込はEditのみ。GameはこのEditorSessionに依存せず、既存の更新経路を使う。
+
+RendererのScene Surfaceはフレーム記録前に設定する。変更/破棄はGPU idle後、描画時はPS_RESOURCE→RENDER_TARGET→PS_RESOURCEと遷移し、BeginOverlayでSwap Chainに戻す。SRVは呼び出し側の所有で、Surfaceを先に無効化してからDescriptor heapを破棄する。sRGB RTVで符号化しUNORM SRVでImGuiへ渡す。GameではSurfaceを作らず直接描画する。
 
 `scene.cpu`は階層/ID/保存/失敗時保持、`scene.warp`は共有メッシュと3体の独立Paletteの画素、Socket解除、再読み込み、リサイズ/破棄を検証する。既存0A/B/Cテストも継続する。WARPは性能評価ではない。

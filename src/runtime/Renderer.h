@@ -29,6 +29,7 @@ struct RenderSettings {
     bool showModels = true, unlit = false;
     bool diagnosticTriangle = false;
     float cameraYaw = 0.35f, cameraPitch = 0.25f, cameraDistance = 7;
+    std::array<float, 3> cameraTarget{0, 0, 0};
 };
 struct RendererOptions { bool warp = false, debug = false, gpuValidation = false; };
 enum class AssetCaptureCheck { None, Corners, UpdatedCorners, Midtone, VfxAlpha };
@@ -44,6 +45,9 @@ public:
     Renderer& operator=(const Renderer&) = delete;
     void Initialize(HWND window, UINT width, UINT height, const RendererOptions& options);
     void Resize(UINT width, UINT height);
+    void SetSceneSurface(UINT width, UINT height, D3D12_CPU_DESCRIPTOR_HANDLE srv,
+        const std::array<float, 4>& clear = RenderSettings{}.clear);
+    void DisableSceneSurface();
     ID3D12GraphicsCommandList* BeginFrame(const RenderSettings& settings, std::span<const DrawItem> items, bool triangle = false);
     void BeginOverlay();
     bool EndFrame(bool vsync, bool capture);
@@ -130,6 +134,12 @@ private:
     DirectX::XMFLOAT4X4 view_{}, projection_{};
     std::unique_ptr<GpuModel> UploadModel(const StaticAsset& asset, const std::vector<SkinVertex>* skin);
     ComPtr<ID3D12Resource> depth_;
+    ComPtr<ID3D12Resource> sceneColor_, sceneDepth_;
+    ComPtr<ID3D12DescriptorHeap> sceneRtv_, sceneDsv_;
+    UINT sceneWidth_ = 0, sceneHeight_ = 0;
+    std::array<float, 4> sceneClear_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneSrv_{};
+    bool sceneSurfaceRecording_ = false;
     ComPtr<ID3D12DescriptorHeap> dsv_;
     ComPtr<ID3D12RootSignature> meshRoot_;
     std::array<ComPtr<ID3D12PipelineState>, 2> meshPso_;

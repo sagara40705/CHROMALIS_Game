@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <stdexcept>
 #include <unordered_map>
+#include <DirectXCollision.h>
+#include <limits>
 
 namespace chromalis {
 namespace {
@@ -11,6 +13,8 @@ struct LoadedAsset {
     SceneAsset source;
     MeshHandle mesh;
     std::unique_ptr<SkeletalAsset> skeleton;
+    std::vector<DirectX::XMFLOAT3> pickVertices;
+    std::vector<uint32_t> pickIndices;
     uint64_t generation = 0;
     ~LoadedAsset() {
         if (mesh.slot == UINT32_MAX) return;
@@ -85,6 +89,8 @@ bool SceneRuntime::Replace(SceneDocument document, const std::string& reload) {
                 const auto cpu = LoadStaticAsset(source.path);
                 if (cpu.id != source.id) throw std::runtime_error("Static asset ID mismatch: " + source.id);
                 asset->mesh = renderer_.CreateMesh(cpu);
+                for (const auto& vertex : cpu.vertices) asset->pickVertices.emplace_back(vertex.position[0], vertex.position[1], vertex.position[2]);
+                asset->pickIndices = cpu.indices;
             } else if (source.kind == SceneAssetKind::Skeletal) {
                 asset->skeleton = std::make_unique<SkeletalAsset>(LoadSkeletalAsset(source.path));
                 if (asset->skeleton->mesh.id != source.id) throw std::runtime_error("Skeletal asset ID mismatch: " + source.id);
@@ -307,5 +313,47 @@ uint64_t SceneRuntime::Generation(EntityId entity) const {
     if (found == state_->indices.end()) return 0;
     const auto& instance = state_->instances[found->second];
     return instance->asset ? instance->asset->generation : 0;
+}
+EntityId SceneRuntime::Pick(const DirectX::XMFLOAT3& origin, const DirectX::XMFLOAT3& direction) const {
+    using namespace DirectX;
+    float nearest = std::numeric_limits<float>::max();
+    EntityId selected = 0;
+    const auto rayOrigin = XMLoadFloat3(&origin), rayDirection = XMVector3Normalize(XMLoadFloat3(&direction));
+    for (size_t i = 0; i < state_->instances.size(); ++i) {
+        const auto& instance = *state_->instances[i];
+        if (!instance.asset || instance.effect) continue;
+        const auto inverse = XMMatrixInverse(nullptr, XMLoadFloat4x4(&state_->worlds[i]));
+        const auto localOrigin = XMVector3TransformCoord(rayOrigin, inverse);
+        const auto localVector = XMVector3TransformNormal(rayDirection, inverse);
+        const auto length = XMVectorGetX(XMVector3Length(localVector));
+        const auto localDirection = XMVectorScale(localVector, 1 / length);
+        const auto& asset = *instance.asset;
+        std::span<const XMFLOAT3> vertices = asset.pickVertices;
+        std::vector<XMFLOAT3> posedVertices;
+        const auto* indices = &asset.pickIndices;
+        if (instance.animation) {
+            // クリック時だけ現在姿勢をCPUで計算する。GPU readbackは行わない。
+            const auto& skeleton = *asset.skeleton;
+            const auto palette = instance.animation->Palette();
+            posedVertices.resize(skeleton.mesh.vertices.size());
+            indices = &skeleton.mesh.indices;
+            for (size_t v = 0; v < posedVertices.size(); ++v) {
+                const auto& position = skeleton.mesh.vertices[v].position;
+                const auto p = XMVectorSet(position[0], position[1], position[2], 1);
+                auto result = XMVectorZero();
+                for (size_t j = 0; j < 4; ++j) result += XMVectorScale(XMVector3TransformCoord(p, XMLoadFloat4x4(&palette[skeleton.skin[v].joints[j]])), skeleton.skin[v].weights[j]);
+                XMStoreFloat3(&posedVertices[v], result);
+            }
+            vertices = posedVertices;
+        }
+        for (size_t triangle = 0; triangle < indices->size(); triangle += 3) {
+            float distance = 0;
+            if (TriangleTests::Intersects(localOrigin, localDirection, XMLoadFloat3(&vertices[(*indices)[triangle]]),
+                XMLoadFloat3(&vertices[(*indices)[triangle + 1]]), XMLoadFloat3(&vertices[(*indices)[triangle + 2]]), distance) && distance / length < nearest) {
+                nearest = distance / length; selected = state_->document.entities[i].id;
+            }
+        }
+    }
+    return selected;
 }
 }

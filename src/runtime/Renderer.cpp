@@ -234,6 +234,7 @@ void Renderer::Transition(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES af
     list_->ResourceBarrier(1, &barrier);
 }
 ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, std::span<const DrawItem> items, bool triangle) {
+    sceneSurfaceRecording_ = sceneColor_ && !triangle;
     frameIndex_ = swapChain_->GetCurrentBackBufferIndex();
     auto& frame = frames_[frameIndex_];
     const auto start = std::chrono::steady_clock::now();
@@ -255,16 +256,19 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, 
     rtv.ptr += static_cast<SIZE_T>(frameIndex_) * rtvStride_;
     list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     list_->ClearRenderTargetView(rtv, settings.clear.data(), 0, nullptr);
-    const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(width_), static_cast<float>(height_), 0, 1};
-    const D3D12_RECT rect{0, 0, static_cast<LONG>(width_), static_cast<LONG>(height_)};
+    const auto drawWidth = sceneColor_ && !triangle ? sceneWidth_ : width_;
+    const auto drawHeight = sceneColor_ && !triangle ? sceneHeight_ : height_;
+    const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(drawWidth), static_cast<float>(drawHeight), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(drawWidth), static_cast<LONG>(drawHeight)};
     list_->RSSetViewports(1, &viewport); list_->RSSetScissorRects(1, &rect);
     list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     using namespace DirectX;
     const float cp = std::cos(settings.cameraPitch), sp = std::sin(settings.cameraPitch);
-    const auto eye = XMVectorSet(std::sin(settings.cameraYaw) * cp * settings.cameraDistance,
+    const auto target = XMVectorSet(settings.cameraTarget[0], settings.cameraTarget[1], settings.cameraTarget[2], 0);
+    const auto eye = target + XMVectorSet(std::sin(settings.cameraYaw) * cp * settings.cameraDistance,
         sp * settings.cameraDistance, -std::cos(settings.cameraYaw) * cp * settings.cameraDistance, 1);
-    XMStoreFloat4x4(&view_, XMMatrixLookAtLH(eye, XMVectorZero(), XMVectorSet(0, 1, 0, 0)));
-    XMStoreFloat4x4(&projection_, XMMatrixPerspectiveFovLH(XM_PIDIV4, static_cast<float>(width_) / height_, 0.05f, 500));
+    XMStoreFloat4x4(&view_, XMMatrixLookAtLH(eye, target, XMVectorSet(0, 1, 0, 0)));
+    XMStoreFloat4x4(&projection_, XMMatrixPerspectiveFovLH(XM_PIDIV4, static_cast<float>(drawWidth) / drawHeight, 0.05f, 500));
     if (triangle) {
         list_->SetGraphicsRootSignature(root_.Get());
         list_->SetGraphicsRootConstantBufferView(0, frame.constants->GetGPUVirtualAddress());
@@ -272,7 +276,16 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, 
     } else {
         auto scene = rtv;
         scene.ptr += FrameCount * rtvStride_;
-        const auto dsv = dsv_->GetCPUDescriptorHandleForHeapStart();
+        auto dsv = dsv_->GetCPUDescriptorHandleForHeapStart();
+        if (sceneColor_) {
+            D3D12_RESOURCE_BARRIER barrier{}; barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition = {sceneColor_.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET};
+            list_->ResourceBarrier(1, &barrier);
+            scene = sceneRtv_->GetCPUDescriptorHandleForHeapStart(); dsv = sceneDsv_->GetCPUDescriptorHandleForHeapStart();
+            const auto decode = [](float v) { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+            const float clear[]{decode(settings.clear[0]), decode(settings.clear[1]), decode(settings.clear[2]), settings.clear[3]};
+            list_->ClearRenderTargetView(scene, clear, 0, nullptr);
+        }
         list_->OMSetRenderTargets(1, &scene, FALSE, &dsv);
         list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
         if (settings.showModels) DrawModels(settings, items);
@@ -280,6 +293,14 @@ ID3D12GraphicsCommandList* Renderer::BeginFrame(const RenderSettings& settings, 
     return list_.Get();
 }
 void Renderer::BeginOverlay() {
+    if (sceneSurfaceRecording_) {
+        D3D12_RESOURCE_BARRIER barrier{}; barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition = {sceneColor_.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+        list_->ResourceBarrier(1, &barrier);
+    }
+    const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(width_), static_cast<float>(height_), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(width_), static_cast<LONG>(height_)};
+    list_->RSSetViewports(1, &viewport); list_->RSSetScissorRects(1, &rect);
     // Editorは表示色を直接出力するため、VFXの後でUNORM Viewへ戻す。
     auto rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += frameIndex_ * rtvStride_;

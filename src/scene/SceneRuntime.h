@@ -39,6 +39,7 @@ public:
     VfxPlayer* Effect(EntityId entity);
     const DirectX::XMFLOAT4X4& World(EntityId entity) const;
     uint64_t Generation(EntityId entity) const;
+    EntityId Pick(const DirectX::XMFLOAT3& origin, const DirectX::XMFLOAT3& direction) const;
 
 private:
     struct State;

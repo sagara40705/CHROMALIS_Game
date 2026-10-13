@@ -267,14 +267,17 @@ public:
                 settings_.x = std::clamp(settings_.x, -1.2f, 0.6f);
                 settings_.y = std::clamp(settings_.y, -0.7f, 0.7f);
             }
-            scene_.Update((options_.integrationSmoke||options_.vfxCheck)?1.0f/60.0f:static_cast<float>(std::min(dt,0.1)));
+            const auto sceneSeconds = (options_.integrationSmoke||options_.vfxCheck)?1.0f/60.0f:static_cast<float>(std::min(dt,0.1));
+            auto& activeScene = overlay_ ? overlay_->UpdateScene(scene_, sceneSeconds) : scene_;
+            if (!overlay_) scene_.Update(sceneSeconds);
             if (!options_.integrationSmoke) {
-                const auto& view = scene_.Document().view;
+                const auto& view = activeScene.Document().view;
                 settings_.cameraYaw = view.yaw; settings_.cameraPitch = view.pitch; settings_.cameraDistance = view.distance;
                 settings_.clear = view.background; settings_.unlit = view.unlit;
             }
-            auto* list = renderer_.BeginFrame(settings_, scene_.DrawItems(), settings_.diagnosticTriangle);
-            if (!settings_.diagnosticTriangle) scene_.DrawEffects(list);
+            if (overlay_) overlay_->ConfigureView(settings_);
+            auto* list = renderer_.BeginFrame(settings_, activeScene.DrawItems(), settings_.diagnosticTriangle);
+            if (!settings_.diagnosticTriangle) activeScene.DrawEffects(list);
             renderer_.BeginOverlay();
             if (overlay_) overlay_->Draw(list);
             const bool last = options_.frameLimit && stats_.frames + 1 >= options_.frameLimit;
@@ -289,7 +292,8 @@ public:
             if (stats_.frames == 1) log_.Write("First command list submitted and Present returned successfully");
             titleTime += dt;
             if (titleTime > 0.5) {
-                const auto title = std::format(L"{} | {:.2f} ms | WASD/arrows: move | Space: reset | Esc: exit", name_, stats_.frameMs);
+                const auto title = std::format(L"{} | {:.2f} ms | {}", name_, stats_.frameMs,
+                    settings_.diagnosticTriangle ? L"WASD/arrows: move | Space: reset | Esc: exit" : L"Scene | Esc: exit");
                 CheckWin32(SetWindowTextW(window_, title.c_str()), "Update diagnostic title");
                 titleTime = 0;
             }

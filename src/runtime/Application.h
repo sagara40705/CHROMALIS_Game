@@ -25,6 +25,8 @@ public:
     virtual void Build(const FrameStats& stats, const InputState& input, RenderSettings& settings) = 0;
     virtual bool CapturesKeyboard() const = 0;
     virtual bool CanClose() { return true; }
+    virtual SceneRuntime& UpdateScene(SceneRuntime& scene, float seconds) { scene.Update(seconds); return scene; }
+    virtual void ConfigureView(RenderSettings&) {}
     virtual void Draw(ID3D12GraphicsCommandList* commands) = 0;
 };
 int RunApplication(HINSTANCE instance, const wchar_t* name, Overlay* overlay);
